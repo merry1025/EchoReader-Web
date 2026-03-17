@@ -84,7 +84,7 @@ function App() {
   const audioChunksRef = useRef([]);
   const mediaRecorderRef = useRef(null);
 
-  // 初始化
+  // 1. 初始化 AI 和 数据
   useEffect(() => {
     const init = async () => {
       try {
@@ -109,7 +109,7 @@ function App() {
     if (saved) setFavorites(JSON.parse(saved));
   }, []);
 
-  // 主题同步
+  // 2. 主题与字体同步
   useEffect(() => {
     document.body.className = theme;
     if (rendition) {
@@ -118,17 +118,25 @@ function App() {
     }
   }, [theme, fontFamily, rendition]);
 
+  // 3. 韵律生成引擎 (卡拉OK高亮优化)
   const generateRhythmHTML = (text, highlightIndex = -1) => {
     if (!text) return '';
-    const tokens = text.split(/([a-zA-Z]+(?:'[a-zA-Z]+)?)/);
+    // 移动端优化：更精确的分词正则
+    const tokens = text.split(/(\s+|[.,!?;:()"'—])|([a-zA-Z]+(?:'[a-zA-Z]+)?)/).filter(Boolean);
     let runningCharCount = 0;
+
     return tokens.map(t => {
       const start = runningCharCount;
       runningCharCount += t.length;
-      if (!t.trim() || /^[^a-zA-Z]+$/.test(t)) return t;
+      
+      // 纯空格或标点不处理
+      if (!t.trim() || !/[a-zA-Z]/.test(t)) return t;
+      
       const cleanToken = t.toLowerCase();
-      const isActive = highlightIndex !== -1 && start <= highlightIndex && highlightIndex < runningCharCount;
+      // 修复移动端索引偏移：如果 highlightIndex 在当前单词范围内则激活
+      const isActive = highlightIndex !== -1 && highlightIndex >= start && highlightIndex < runningCharCount;
       const karaokeClass = isActive ? 'active-word' : '';
+
       if (functionWords.has(cleanToken)) {
         return `<span class="${karaokeClass}" style="color: #888;">'${cleanToken}</span>`;
       } else {
@@ -156,7 +164,6 @@ function App() {
     const file = e.target.files[0];
     if (!file) return;
     setLoading(true);
-    setStatus('⏳ 正在解析书籍...');
     const buffer = await file.arrayBuffer();
     const epub = ePub(buffer);
     const meta = await epub.loaded.metadata;
@@ -178,7 +185,6 @@ function App() {
       epub.destroy();
       loadLibrary();
       setLoading(false);
-      setStatus('✨ 已存入书架');
     };
   };
 
@@ -199,21 +205,19 @@ function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [viewMode, rendition]);
 
-  // 🌟 阅读器渲染逻辑核心 (修复白屏的关键点)
+  // 🌟 阅读器渲染逻辑核心 (移动端手势修复版)
   useEffect(() => {
     if (viewMode !== 'reading' || !bookBlob) return;
 
     let rendInstance = null;
     let bookInstance = null;
 
-    // 🌟 将延迟增加到 400ms，确保 Framer Motion 动画彻底完成，容器尺寸稳定
     const timer = setTimeout(() => {
       if (!viewerRef.current || viewMode !== 'reading') return;
       
       const container = viewerRef.current;
       container.innerHTML = ''; 
 
-      console.log("正在渲染书籍...");
       bookInstance = ePub(bookBlob);
       rendInstance = bookInstance.renderTo(container, {
         width: '100%', height: '100%', spread: 'none', manager: 'continuous', flow: 'paginated'
@@ -239,23 +243,32 @@ function App() {
         rendInstance.on('relocated', (loc) => localStorage.setItem(key, loc.start.cfi));
       });
 
-      bookInstance.loaded.navigation.then(nav => setToc(nav.toc || []));
+      // 🌟 核心：使用内容钩子注入手势监听 (彻底修复移动端翻页)
+      rendInstance.hooks.content.register((contents) => {
+        const body = contents.window.document.body;
+        
+        let touchStartX = 0;
+        body.addEventListener('touchstart', (e) => {
+          touchStartX = e.changedTouches[0].clientX;
+        }, { passive: true });
 
-      // 键盘与手势翻页
-      const handleIframeKeyDown = (e) => {
-        if (e.key === 'ArrowRight') rendInstance.next();
-        if (e.key === 'ArrowLeft') rendInstance.prev();
-      };
-      rendInstance.on('keydown', handleIframeKeyDown);
+        body.addEventListener('touchend', (e) => {
+          const touchEndX = e.changedTouches[0].clientX;
+          const diff = touchEndX - touchStartX;
+          const screenWidth = window.innerWidth;
 
-      let touchStartX = 0;
-      rendInstance.on('touchstart', (e) => { touchStartX = e.changedTouches[0].screenX; });
-      rendInstance.on('touchend', (e) => {
-        const touchEndX = e.changedTouches[0].screenX;
-        if (window.innerWidth <= 768) {
-          if (touchEndX < touchStartX - 50) rendInstance.next();
-          if (touchEndX > touchStartX + 50) rendInstance.prev();
-        }
+          if (screenWidth <= 768) {
+            // 滑动翻页 (阈值 50px)
+            if (diff < -50) rendInstance.next();
+            else if (diff > 50) rendInstance.prev();
+            // 点击翻页 (左右边缘 30% 区域)
+            else {
+              const clickX = e.changedTouches[0].clientX;
+              if (clickX < screenWidth * 0.3) rendInstance.prev();
+              else if (clickX > screenWidth * 0.7) rendInstance.next();
+            }
+          }
+        }, { passive: true });
       });
 
       rendInstance.on('selected', (cfi, contents) => {
@@ -268,19 +281,6 @@ function App() {
           const iframeRect = contents.document.defaultView.frameElement.getBoundingClientRect();
           setPopupPos({ x: iframeRect.left + rect.left + (rect.width / 2), y: iframeRect.top + rect.top - 10 });
         });
-      });
-
-      // 🌟 修复桌面端点击逻辑：阻止非手机端的点击翻页
-      rendInstance.on('click', (e) => {
-        setPopupPos(null);
-        const sel = e.view.document.getSelection();
-        if (sel && sel.toString().trim().length > 0) return;
-
-        if (window.innerWidth <= 768) {
-          const screenWidth = e.view.innerWidth;
-          if (e.clientX < screenWidth * 0.35) rendInstance.prev();
-          else if (e.clientX > screenWidth * 0.65) rendInstance.next();
-        }
       });
 
       setBook(bookInstance);
@@ -299,15 +299,26 @@ function App() {
     localStorage.setItem('echoreader_local_favs', JSON.stringify(newList));
   };
 
+  // 🌟 卡拉OK逻辑增强
   const playTTS = () => {
     if (!currentText) return;
-    window.speechSynthesis.cancel();
+    window.speechSynthesis.cancel(); // 必须先重置
+    
     const ut = new SpeechSynthesisUtterance(currentText);
     const v = voices.find(x => x.voiceURI === selectedVoice);
     if (v) ut.voice = v;
-    ut.onboundary = (event) => event.name === 'word' && setActiveCharIndex(event.charIndex);
+    
+    // 修复某些移动端不触发 boundary 的问题
+    ut.rate = 0.95; // 略微降速提高成功率
+    
+    ut.onboundary = (event) => {
+      if (event.name === 'word') {
+        setActiveCharIndex(event.charIndex);
+      }
+    };
     ut.onend = () => setActiveCharIndex(-1);
     ut.onerror = () => setActiveCharIndex(-1);
+    
     window.speechSynthesis.speak(ut);
   };
 
@@ -324,15 +335,13 @@ function App() {
       audioChunksRef.current = [];
       mr.ondataavailable = e => audioChunksRef.current.push(e.data);
       mr.onstop = async () => {
-        setStatus('⏳ AI 识别中...');
         const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const ac = new AudioContext({ sampleRate: 16000 });
         const buf = await ac.decodeAudioData(await blob.arrayBuffer());
         const out = await transcriberRef.current(buf.getChannelData(0));
-        const recognizedText = out.text.trim();
         const clean = (str) => str.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "").trim();
         const originalWords = currentText.split(/(\s+)/);
-        const recognizedWords = clean(recognizedText).split(/\s+/);
+        const recognizedWords = clean(out.text).split(/\s+/);
         let recIdx = 0;
         const feedback = originalWords.map((token) => {
             if (!token.trim()) return token;
@@ -353,16 +362,8 @@ function App() {
     }
   };
 
-  const pageVariants = {
-    initial: { opacity: 0, y: 10 },
-    animate: { opacity: 1, y: 0, transition: { duration: 0.3 } },
-    exit: { opacity: 0, transition: { duration: 0.2 } }
-  };
-
-  const sidebarVariants = {
-    closed: { x: "100%", transition: { type: "spring", stiffness: 300, damping: 30 } },
-    open: { x: 0, transition: { type: "spring", stiffness: 300, damping: 30 } }
-  };
+  const pageVariants = { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0 } };
+  const sidebarVariants = { closed: { x: "100%" }, open: { x: 0 } };
 
   return (
     <div className="app-container">
@@ -373,16 +374,13 @@ function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><Library /> <b>EchoReader 书架</b></div>
               <div className="toolbar">
                 <button className="btn btn-fav" onClick={() => setShowFavorites(true)}><Bookmark size={16} /> 收藏夹</button>
-                <label className="btn">
-                  <Upload size={16} /> 上传 EPUB
-                  <input type="file" accept=".epub" onChange={handleUpload} style={{ display: 'none' }} />
-                </label>
+                <label className="btn"><Upload size={16} /> 上传<input type="file" accept=".epub" onChange={handleUpload} style={{ display: 'none' }} /></label>
               </div>
             </div>
             <div className="library-status">{status}</div>
             <div className="bookshelf-grid">
               {libraryBooks.map((b, index) => (
-                <motion.div key={b.id} className="book-card" onClick={() => openBook(b)} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1, transition: { delay: index * 0.05 } }} whileTap={{ scale: 0.95 }}>
+                <motion.div key={b.id} className="book-card" onClick={() => openBook(b)} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1, transition: { delay: index * 0.05 } }}>
                   <div className="book-cover-wrapper">
                     {b.coverUrl ? <img src={b.coverUrl} className="book-cover" alt="" /> : <div className="no-cover">📖</div>}
                     <button className="btn-delete-book" onClick={(e) => { e.stopPropagation(); deleteBookFromDB(b.id); loadLibrary(); }}><Trash2 size={16} /></button>
@@ -404,8 +402,8 @@ function App() {
               <div className="toolbar">
                 <button className="btn btn-fav" onClick={() => setShowFavorites(true)}><Bookmark size={16} /> 收藏夹</button>
                 <select className="select-theme" value={theme} onChange={e => setTheme(e.target.value)}>
-                  <option value="theme-light">☀️ 浅色模式</option>
-                  <option value="theme-dark">🌙 深色模式</option>
+                  <option value="theme-light">☀️ 浅色</option>
+                  <option value="theme-dark">🌙 深色</option>
                 </select>
               </div>
             </div>
@@ -430,10 +428,8 @@ function App() {
                   <div className="feedback-title"><Volume2 size={14} /> 朗读/韵律 {activeCharIndex !== -1 && <span className="karaoke-badge">同步中...</span>}</div>
                   {rhythmHTML && <div className="rhythm-display karaoke-mode" dangerouslySetInnerHTML={{ __html: rhythmHTML }} />}
                   {comparisonHTML && (
-                      <>
-                          <div className="feedback-title" style={{marginTop:'8px'}}><CheckCircle2 size={14} color="#28a745" /> 跟读得分</div>
-                          <div className="rhythm-display comparison-display" dangerouslySetInnerHTML={{ __html: comparisonHTML }} />
-                      </>
+                      <><div className="feedback-title" style={{marginTop:'8px'}}><CheckCircle2 size={14} color="#28a745" /> 跟读得分</div>
+                      <div className="rhythm-display comparison-display" dangerouslySetInnerHTML={{ __html: comparisonHTML }} /></>
                   )}
               </div>
               <div className="panel-controls">
@@ -451,34 +447,20 @@ function App() {
 
       <AnimatePresence>
         {showToc && (
-          <>
-            <motion.div key="overlay-toc" className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowToc(false)} />
-            <motion.div key="sidebar-toc" className="toc-sidebar" variants={sidebarVariants} initial={{ x: "-100%" }} animate={{ x: 0 }} exit={{ x: "-100%" }} style={{left:0, right:'auto'}}>
-              <div className="toc-header"><b>目录</b><X onClick={() => setShowToc(false)} /></div>
-              <div className="toc-content">{toc.map((t, i) => <div key={i} className="toc-item" onClick={() => { rendition.display(t.href); setShowToc(false); }}>{t.label}</div>)}</div>
-            </motion.div>
-          </>
+          <><motion.div key="overlay-toc" className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowToc(false)} />
+          <motion.div key="sidebar-toc" className="toc-sidebar" variants={sidebarVariants} initial={{ x: "-100%" }} animate={{ x: 0 }} exit={{ x: "-100%" }} style={{left:0, right:'auto'}}>
+            <div className="toc-header"><b>目录</b><X onClick={() => setShowToc(false)} /></div>
+            <div className="toc-content">{toc.map((t, i) => <div key={i} className="toc-item" onClick={() => { rendition.display(t.href); setShowToc(false); }}>{t.label}</div>)}</div>
+          </motion.div></>
         )}
         {showFavorites && (
-          <>
-            <motion.div key="overlay-fav" className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowFavorites(false)} />
-            <motion.div key="sidebar-fav" className="fav-sidebar" variants={sidebarVariants} initial="closed" animate="open" exit="closed">
-              <div className="toc-header"><b>收藏夹</b><X onClick={() => setShowFavorites(false)} /></div>
-              <div className="toc-content">
-                {favorites.length === 0 ? <p style={{textAlign:'center', padding:'20px'}}>暂无收藏内容</p> : 
-                  favorites.map(f => (
-                    <div key={f.id} className="fav-item">
-                      <p>{f.text}</p>
-                      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                        <small style={{color:'var(--primary-color)'}}>📖 {f.book}</small>
-                        <Trash2 size={14} style={{cursor:'pointer', color:'#ff4444'}} onClick={() => syncFavs(favorites.filter(x => x.id !== f.id))} />
-                      </div>
-                    </div>
-                  ))
-                }
-              </div>
-            </motion.div>
-          </>
+          <><motion.div key="overlay-fav" className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowFavorites(false)} />
+          <motion.div key="sidebar-fav" className="fav-sidebar" variants={sidebarVariants} initial="closed" animate="open" exit="closed">
+            <div className="toc-header"><b>收藏夹</b><X onClick={() => setShowFavorites(false)} /></div>
+            <div className="toc-content">{favorites.length === 0 ? <p style={{textAlign:'center', padding:'20px'}}>暂无内容</p> : 
+              favorites.map(f => (<div key={f.id} className="fav-item"><p>{f.text}</p><div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}><small style={{color:'var(--primary-color)'}}>📖 {f.book}</small><Trash2 size={14} style={{cursor:'pointer', color:'#ff4444'}} onClick={() => syncFavs(favorites.filter(x => x.id !== f.id))} /></div></div>))
+            }</div>
+          </motion.div></>
         )}
       </AnimatePresence>
     </div>
