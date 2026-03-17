@@ -25,7 +25,7 @@ const STORE_NAME = 'books';
 
 const openDB = () => {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 2); // 升级版本
+    const request = indexedDB.open(DB_NAME, 2);
     request.onupgradeneeded = (e) => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -50,9 +50,6 @@ const deleteBookFromDB = async (id) => {
   db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).delete(id);
 };
 
-// ==========================================
-// --- 主组件 App ---
-// ==========================================
 function App() {
   const [viewMode, setViewMode] = useState('library');
   const [libraryBooks, setLibraryBooks] = useState([]);
@@ -104,6 +101,7 @@ function App() {
     loadVoices();
     window.speechSynthesis.onvoiceschanged = loadVoices;
 
+    // 🌟 核心修复：确保初始化时正确读取收藏夹
     const saved = localStorage.getItem('echoreader_local_favs');
     if (saved) setFavorites(JSON.parse(saved));
   }, []);
@@ -150,19 +148,18 @@ function App() {
     };
   };
 
-  // 🌟 核心：打开书本并触发渲染循环
+  // 🌟 打开书本
   const openBook = (item) => {
-    setBookBlob(item.blob); // 存储原始文件
-    setViewMode('reading'); // 切换视图
+    setBookBlob(item.blob);
+    setViewMode('reading');
   };
 
-  // 🌟 核心：当视图变为阅读模式且文件就绪时，初始化 EPUB.js
+  // 🌟 渲染循环
   useEffect(() => {
     if (viewMode !== 'reading' || !bookBlob || !viewerRef.current) return;
 
-    console.log("正在初始化渲染容器...");
     const currentViewer = viewerRef.current;
-    currentViewer.innerHTML = ''; // 清空
+    currentViewer.innerHTML = ''; 
 
     const eブック = ePub(bookBlob);
     const rend = eブック.renderTo(currentViewer, {
@@ -232,6 +229,12 @@ function App() {
     }).join('');
   };
 
+  // 🌟 统一收藏逻辑函数
+  const syncFavs = (newList) => {
+    setFavorites(newList);
+    localStorage.setItem('echoreader_local_favs', JSON.stringify(newList));
+  };
+
   const playTTS = () => {
     window.speechSynthesis.cancel();
     const ut = new SpeechSynthesisUtterance(currentText);
@@ -266,83 +269,86 @@ function App() {
     }
   };
 
-  // UI 组件
-  if (viewMode === 'library') {
-    return (
-      <div className="bookshelf-container">
-        <div className="header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><Library /> <b>EchoReader 书架</b></div>
-          <div className="toolbar">
-            <label className="btn">
-              <Upload size={16} /> 上传 EPUB
-              <input type="file" accept=".epub" onChange={handleUpload} style={{ display: 'none' }} />
-            </label>
-          </div>
-        </div>
-        <div className="library-status">{status}</div>
-        <div className="bookshelf-grid">
-          {libraryBooks.map(b => (
-            <div key={b.id} className="book-card" onClick={() => openBook(b)}>
-              <div className="book-cover-wrapper">
-                {b.coverUrl ? <img src={b.coverUrl} className="book-cover" alt="" /> : <div className="no-cover">📖</div>}
-                <button className="btn-delete-book" onClick={(e) => { e.stopPropagation(); deleteBookFromDB(b.id); loadLibrary(); }}><Trash2 size={16} /></button>
-              </div>
-              <div className="book-info"><b>{b.title}</b><p>{b.author}</p></div>
-            </div>
-          ))}
-        </div>
-        {loading && <div className="overlay"><Loader2 className="animate-spin" size={48} color="white" /></div>}
-      </div>
-    );
-  }
-
   return (
     <div className="app-container">
-      <div className="header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <button className="btn btn-icon" onClick={() => { setViewMode('library'); setBookBlob(null); }}><Library size={20} /></button>
-          <button className="btn btn-icon hide-on-mobile" onClick={() => setShowToc(true)}><Menu size={20} /></button>
-          <span className="hide-on-mobile"><b>{bookTitle}</b></span>
-        </div>
-        <div className="toolbar">
-          <button className="btn btn-fav" onClick={() => setShowFavorites(true)}><Bookmark size={16} /> 收藏</button>
-          <select className="select-theme" value={theme} onChange={e => setTheme(e.target.value)}>
-            <option value="theme-light">☀️ 浅色</option>
-            <option value="theme-dark">🌙 深色</option>
-          </select>
-        </div>
-      </div>
-
-      <div className="main-content">
-        <button className="nav-btn nav-btn-left hide-on-mobile" onClick={() => rendition?.prev()}><ChevronLeft size={36} /></button>
-        <div id="viewer" ref={viewerRef}></div>
-        {popupPos && (
-          <div className="selection-popup" style={{ left: popupPos.x, top: popupPos.y }}>
-            <button className="popup-btn" onClick={() => {
-              const item = { id: Date.now(), text: currentText, book: bookTitle, date: new Date().toLocaleString() };
-              const newFavs = [item, ...favorites];
-              setFavorites(newFavs);
-              localStorage.setItem('echoreader_local_favs', JSON.stringify(newFavs));
-              setPopupPos(null);
-            }}>⭐ 收藏</button>
+      {/* --- 全局渲染逻辑 --- */}
+      
+      {viewMode === 'library' ? (
+        <div className="bookshelf-container">
+          <div className="header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><Library /> <b>EchoReader 书架</b></div>
+            <div className="toolbar">
+              {/* 🌟 书架增加收藏入口 */}
+              <button className="btn btn-fav" onClick={() => setShowFavorites(true)} style={{backgroundColor: '#FF9900', color: '#000'}}><Bookmark size={16} /> 收藏夹</button>
+              <label className="btn">
+                <Upload size={16} /> 上传 EPUB
+                <input type="file" accept=".epub" onChange={handleUpload} style={{ display: 'none' }} />
+              </label>
+            </div>
           </div>
-        )}
-        <button className="nav-btn nav-btn-right hide-on-mobile" onClick={() => rendition?.next()}><ChevronRight size={36} /></button>
-      </div>
+          <div className="library-status">{status}</div>
+          <div className="bookshelf-grid">
+            {libraryBooks.map(b => (
+              <div key={b.id} className="book-card" onClick={() => openBook(b)}>
+                <div className="book-cover-wrapper">
+                  {b.coverUrl ? <img src={b.coverUrl} className="book-cover" alt="" /> : <div className="no-cover">📖</div>}
+                  <button className="btn-delete-book" onClick={(e) => { e.stopPropagation(); deleteBookFromDB(b.id); loadLibrary(); }}><Trash2 size={16} /></button>
+                </div>
+                <div className="book-info"><b>{b.title}</b><p>{b.author}</p></div>
+              </div>
+            ))}
+          </div>
+          {loading && <div className="overlay"><Loader2 className="animate-spin" size={48} color="white" /></div>}
+        </div>
+      ) : (
+        <div className="reader-view">
+          <div className="header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <button className="btn btn-icon" onClick={() => { setViewMode('library'); setBookBlob(null); }}><Library size={20} /></button>
+              <button className="btn btn-icon hide-on-mobile" onClick={() => setShowToc(true)}><Menu size={20} /></button>
+              <span className="hide-on-mobile"><b>{bookTitle}</b></span>
+            </div>
+            <div className="toolbar">
+              <button className="btn btn-fav" onClick={() => setShowFavorites(true)} style={{backgroundColor: '#FF9900', color: '#000'}}><Bookmark size={16} /> 收藏夹</button>
+              <select className="select-theme" value={theme} onChange={e => setTheme(e.target.value)}>
+                <option value="theme-light">☀️ 浅色</option>
+                <option value="theme-dark">🌙 深色</option>
+              </select>
+            </div>
+          </div>
 
-      <div className="scoring-panel">
-        {rhythmHTML && <div className="rhythm-display" dangerouslySetInnerHTML={{ __html: rhythmHTML }} />}
-        <div className="panel-controls">
-          <div className="status-text">{status}</div>
-          <div className="toolbar">
-            <select className="voice-select" value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}>
-              {voices.map(v => <option key={v.voiceURI} value={v.voiceURI}>🇺🇸 {v.name.split(' ')[1] || v.name}</option>)}
-            </select>
-            <button className="btn" onClick={playTTS}><Play size={16} /> 标准音</button>
-            <button className="btn" onClick={toggleRecording} style={{ background: isRecording ? '#f44' : '#1a73e8' }}>{isRecording ? '结束' : '跟读'}</button>
+          <div className="main-content">
+            <button className="nav-btn nav-btn-left hide-on-mobile" onClick={() => rendition?.prev()}><ChevronLeft size={36} /></button>
+            <div id="viewer" ref={viewerRef}></div>
+            {popupPos && (
+              <div className="selection-popup" style={{ left: popupPos.x, top: popupPos.y }}>
+                <button className="popup-btn" onClick={() => {
+                  const item = { id: Date.now(), text: currentText, book: bookTitle, date: new Date().toLocaleString() };
+                  syncFavs([item, ...favorites]);
+                  setPopupPos(null);
+                }}>⭐ 收藏</button>
+              </div>
+            )}
+            <button className="nav-btn nav-btn-right hide-on-mobile" onClick={() => rendition?.next()}><ChevronRight size={36} /></button>
+          </div>
+
+          <div className="scoring-panel">
+            {rhythmHTML && <div className="rhythm-display" dangerouslySetInnerHTML={{ __html: rhythmHTML }} />}
+            <div className="panel-controls">
+              <div className="status-text">{status}</div>
+              <div className="toolbar">
+                <select className="voice-select" value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}>
+                  {voices.map(v => <option key={v.voiceURI} value={v.voiceURI}>🇺🇸 {v.name.split(' ')[1] || v.name}</option>)}
+                </select>
+                <button className="btn" onClick={playTTS}><Play size={16} /> 标准音</button>
+                <button className="btn" onClick={toggleRecording} style={{ background: isRecording ? '#f44' : '#1a73e8' }}>{isRecording ? '结束' : '跟读'}</button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* --- 🌟 全局共用组件：侧边栏和遮罩 --- */}
 
       <div className={`toc-sidebar ${showToc ? 'open' : ''}`}>
         <div className="toc-header"><b>目录</b><X onClick={() => setShowToc(false)} /></div>
@@ -352,11 +358,19 @@ function App() {
       <div className={`fav-sidebar ${showFavorites ? 'open' : ''}`}>
         <div className="toc-header"><b>收藏夹</b><X onClick={() => setShowFavorites(false)} /></div>
         <div className="toc-content">
-          {favorites.map(f => <div key={f.id} className="fav-item"><p>{f.text}</p><small>{f.book}</small><Trash2 size={14} onClick={() => {
-            const up = favorites.filter(x => x.id !== f.id);
-            setFavorites(up);
-            localStorage.setItem('echoreader_local_favs', JSON.stringify(up));
-          }} /></div>)}
+          {favorites.length === 0 ? <p style={{textAlign:'center', padding:'20px'}}>暂无收藏内容</p> : 
+            favorites.map(f => (
+              <div key={f.id} className="fav-item">
+                <p>{f.text}</p>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                  <small style={{color:'var(--primary-color)'}}>📖 {f.book}</small>
+                  <Trash2 size={14} style={{cursor:'pointer', color:'#ff4444'}} onClick={() => {
+                    syncFavs(favorites.filter(x => x.id !== f.id));
+                  }} />
+                </div>
+              </div>
+            ))
+          }
         </div>
       </div>
 
