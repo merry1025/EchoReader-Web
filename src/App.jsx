@@ -56,7 +56,6 @@ function App() {
   const [libraryBooks, setLibraryBooks] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // 阅读器状态
   const [bookBlob, setBookBlob] = useState(null);
   const [book, setBook] = useState(null);
   const [rendition, setRendition] = useState(null);
@@ -84,7 +83,6 @@ function App() {
   const audioChunksRef = useRef([]);
   const mediaRecorderRef = useRef(null);
 
-  // 1. 初始化 AI 和 数据
   useEffect(() => {
     const init = async () => {
       try {
@@ -109,7 +107,6 @@ function App() {
     if (saved) setFavorites(JSON.parse(saved));
   }, []);
 
-  // 2. 主题与字体同步
   useEffect(() => {
     document.body.className = theme;
     if (rendition) {
@@ -118,25 +115,17 @@ function App() {
     }
   }, [theme, fontFamily, rendition]);
 
-  // 3. 韵律生成引擎 (卡拉OK高亮优化)
   const generateRhythmHTML = (text, highlightIndex = -1) => {
     if (!text) return '';
-    // 移动端优化：更精确的分词正则
     const tokens = text.split(/(\s+|[.,!?;:()"'—])|([a-zA-Z]+(?:'[a-zA-Z]+)?)/).filter(Boolean);
     let runningCharCount = 0;
-
     return tokens.map(t => {
       const start = runningCharCount;
       runningCharCount += t.length;
-      
-      // 纯空格或标点不处理
       if (!t.trim() || !/[a-zA-Z]/.test(t)) return t;
-      
       const cleanToken = t.toLowerCase();
-      // 修复移动端索引偏移：如果 highlightIndex 在当前单词范围内则激活
       const isActive = highlightIndex !== -1 && highlightIndex >= start && highlightIndex < runningCharCount;
       const karaokeClass = isActive ? 'active-word' : '';
-
       if (functionWords.has(cleanToken)) {
         return `<span class="${karaokeClass}" style="color: #888;">'${cleanToken}</span>`;
       } else {
@@ -146,9 +135,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (currentText) {
-      setRhythmHTML(generateRhythmHTML(currentText, activeCharIndex));
-    }
+    if (currentText) setRhythmHTML(generateRhythmHTML(currentText, activeCharIndex));
   }, [activeCharIndex, currentText]);
 
   const loadLibrary = async () => {
@@ -193,7 +180,6 @@ function App() {
     setViewMode('reading');
   };
 
-  // 全局键盘监听
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
       if (viewMode === 'reading' && rendition) {
@@ -205,35 +191,27 @@ function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [viewMode, rendition]);
 
-  // 🌟 阅读器渲染逻辑核心 (移动端手势修复版)
   useEffect(() => {
     if (viewMode !== 'reading' || !bookBlob) return;
-
     let rendInstance = null;
     let bookInstance = null;
-
     const timer = setTimeout(() => {
       if (!viewerRef.current || viewMode !== 'reading') return;
-      
       const container = viewerRef.current;
       container.innerHTML = ''; 
-
       bookInstance = ePub(bookBlob);
       rendInstance = bookInstance.renderTo(container, {
         width: '100%', height: '100%', spread: 'none', manager: 'continuous', flow: 'paginated'
       });
-
       const isMobile = window.innerWidth <= 768;
       rendInstance.themes.default({
         'p': { 'line-height': isMobile ? '1.25 !important' : '1.6 !important' },
         'div': { 'line-height': isMobile ? '1.25 !important' : '1.6 !important' }
       });
-
       rendInstance.themes.register('theme-light', { body: { background: '#ffffff', color: '#333' }});
       rendInstance.themes.register('theme-dark', { body: { background: '#121212', color: '#e0e0e0' }});
       rendInstance.themes.select(theme);
       rendInstance.themes.font(fontFamily);
-
       bookInstance.ready.then(() => {
         const meta = bookInstance.packaging.metadata;
         setBookTitle(meta.title || "未知书籍");
@@ -242,26 +220,18 @@ function App() {
         rendInstance.display(saved || undefined).catch(() => rendInstance.display());
         rendInstance.on('relocated', (loc) => localStorage.setItem(key, loc.start.cfi));
       });
-
-      // 🌟 核心：使用内容钩子注入手势监听 (彻底修复移动端翻页)
+      bookInstance.loaded.navigation.then(nav => setToc(nav.toc || []));
       rendInstance.hooks.content.register((contents) => {
         const body = contents.window.document.body;
-        
         let touchStartX = 0;
-        body.addEventListener('touchstart', (e) => {
-          touchStartX = e.changedTouches[0].clientX;
-        }, { passive: true });
-
+        body.addEventListener('touchstart', (e) => { touchStartX = e.changedTouches[0].clientX; }, { passive: true });
         body.addEventListener('touchend', (e) => {
           const touchEndX = e.changedTouches[0].clientX;
           const diff = touchEndX - touchStartX;
           const screenWidth = window.innerWidth;
-
           if (screenWidth <= 768) {
-            // 滑动翻页 (阈值 50px)
             if (diff < -50) rendInstance.next();
             else if (diff > 50) rendInstance.prev();
-            // 点击翻页 (左右边缘 30% 区域)
             else {
               const clickX = e.changedTouches[0].clientX;
               if (clickX < screenWidth * 0.3) rendInstance.prev();
@@ -270,7 +240,6 @@ function App() {
           }
         }, { passive: true });
       });
-
       rendInstance.on('selected', (cfi, contents) => {
         bookInstance.getRange(cfi).then(range => {
           const text = range.toString().trim();
@@ -282,11 +251,9 @@ function App() {
           setPopupPos({ x: iframeRect.left + rect.left + (rect.width / 2), y: iframeRect.top + rect.top - 10 });
         });
       });
-
       setBook(bookInstance);
       setRendition(rendInstance);
     }, 400); 
-
     return () => {
       clearTimeout(timer);
       if (rendInstance) rendInstance.destroy();
@@ -299,26 +266,16 @@ function App() {
     localStorage.setItem('echoreader_local_favs', JSON.stringify(newList));
   };
 
-  // 🌟 卡拉OK逻辑增强
   const playTTS = () => {
     if (!currentText) return;
-    window.speechSynthesis.cancel(); // 必须先重置
-    
+    window.speechSynthesis.cancel();
     const ut = new SpeechSynthesisUtterance(currentText);
     const v = voices.find(x => x.voiceURI === selectedVoice);
     if (v) ut.voice = v;
-    
-    // 修复某些移动端不触发 boundary 的问题
-    ut.rate = 0.95; // 略微降速提高成功率
-    
-    ut.onboundary = (event) => {
-      if (event.name === 'word') {
-        setActiveCharIndex(event.charIndex);
-      }
-    };
+    ut.rate = 0.95;
+    ut.onboundary = (event) => event.name === 'word' && setActiveCharIndex(event.charIndex);
     ut.onend = () => setActiveCharIndex(-1);
     ut.onerror = () => setActiveCharIndex(-1);
-    
     window.speechSynthesis.speak(ut);
   };
 
@@ -395,8 +352,9 @@ function App() {
           <motion.div key="reader" className="reader-view" variants={pageVariants} initial="initial" animate="animate" exit="exit">
             <div className="header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <button className="btn btn-icon" onClick={() => { setViewMode('library'); setBookBlob(null); }}><Library size={20} /></button>
-                <button className="btn btn-icon hide-on-mobile" onClick={() => setShowToc(true)}><Menu size={20} /></button>
+                <button className="btn btn-icon" onClick={() => { setViewMode('library'); setBookBlob(null); }} title="返回书架"><Library size={20} /></button>
+                {/* 🌟 核心修复：去掉了按钮上的 hide-on-mobile，并保持在返回按钮右侧 */}
+                <button className="btn btn-icon" onClick={() => setShowToc(true)} title="显示章节"><Menu size={20} /></button>
                 <span className="hide-on-mobile"><b>{bookTitle}</b></span>
               </div>
               <div className="toolbar">
@@ -458,7 +416,7 @@ function App() {
           <motion.div key="sidebar-fav" className="fav-sidebar" variants={sidebarVariants} initial="closed" animate="open" exit="closed">
             <div className="toc-header"><b>收藏夹</b><X onClick={() => setShowFavorites(false)} /></div>
             <div className="toc-content">{favorites.length === 0 ? <p style={{textAlign:'center', padding:'20px'}}>暂无内容</p> : 
-              favorites.map(f => (<div key={f.id} className="fav-item"><p>{f.text}</p><div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}><small style={{color:'var(--primary-color)'}}>📖 {f.book}</small><Trash2 size={14} style={{cursor:'pointer', color:'#ff4444'}} onClick={() => syncFavs(favorites.filter(x => x.id !== f.id))} /></div></div>))
+              favorites.map(f => (<div key={f.id} className="fav-item"><p>{f.text}</p><div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}><small style={{color:'var(--primary-color)'}}>📖 {f.book}</small>辅助<Trash2 size={14} style={{cursor:'pointer', color:'#ff4444'}} onClick={() => syncFavs(favorites.filter(x => x.id !== f.id))} /></div></div>))
             }</div>
           </motion.div></>
         )}
