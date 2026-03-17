@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ePub from 'epubjs';
 import { pipeline, env } from '@xenova/transformers';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Upload, Play, Mic, MicOff, Menu, ChevronLeft, ChevronRight, 
-  X, Bookmark, Trash2, Library, BookOpenText, Loader2
+  X, Bookmark, Trash2, Library, BookOpenText, Loader2, CheckCircle2, Volume2
 } from 'lucide-react';
 import './App.css';
 
@@ -14,7 +15,7 @@ env.useBrowserCache = true;
 const FONT_OPTIONS = [
   { label: '系统默认', value: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' },
   { label: 'Georgia (衬线)', value: 'Georgia, serif' },
-  { label: 'Arial (无衬线)', value: 'Arial, sans-serif' },
+  { label: 'Arial (无摄线)', value: 'Arial, sans-serif' },
 ];
 
 const functionWords = new Set(["a", "an", "the", "and", "but", "or", "for", "nor", "so", "yet", "at", "by", "from", "in", "into", "of", "on", "to", "with", "as", "about", "i", "me", "my", "mine", "you", "your", "yours", "he", "him", "his", "she", "her", "hers", "it", "its", "we", "us", "our", "ours", "they", "them", "their", "theirs", "this", "that", "these", "those", "is", "am", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could", "shall", "should", "will", "would", "may", "might", "must"]);
@@ -67,6 +68,9 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [currentText, setCurrentText] = useState('');
   const [rhythmHTML, setRhythmHTML] = useState('');
+  const [comparisonHTML, setComparisonHTML] = useState('');
+  const [activeCharIndex, setActiveCharIndex] = useState(-1);
+
   const [voices, setVoices] = useState([]);
   const [selectedVoice, setSelectedVoice] = useState('');
   const [toc, setToc] = useState([]);
@@ -80,7 +84,7 @@ function App() {
   const audioChunksRef = useRef([]);
   const mediaRecorderRef = useRef(null);
 
-  // 1. 初始化 AI 和 数据
+  // 初始化
   useEffect(() => {
     const init = async () => {
       try {
@@ -101,10 +105,43 @@ function App() {
     loadVoices();
     window.speechSynthesis.onvoiceschanged = loadVoices;
 
-    // 🌟 核心修复：确保初始化时正确读取收藏夹
     const saved = localStorage.getItem('echoreader_local_favs');
     if (saved) setFavorites(JSON.parse(saved));
   }, []);
+
+  // 主题同步
+  useEffect(() => {
+    document.body.className = theme;
+    if (rendition) {
+      rendition.themes.select(theme);
+      rendition.themes.font(fontFamily);
+    }
+  }, [theme, fontFamily, rendition]);
+
+  const generateRhythmHTML = (text, highlightIndex = -1) => {
+    if (!text) return '';
+    const tokens = text.split(/([a-zA-Z]+(?:'[a-zA-Z]+)?)/);
+    let runningCharCount = 0;
+    return tokens.map(t => {
+      const start = runningCharCount;
+      runningCharCount += t.length;
+      if (!t.trim() || /^[^a-zA-Z]+$/.test(t)) return t;
+      const cleanToken = t.toLowerCase();
+      const isActive = highlightIndex !== -1 && start <= highlightIndex && highlightIndex < runningCharCount;
+      const karaokeClass = isActive ? 'active-word' : '';
+      if (functionWords.has(cleanToken)) {
+        return `<span class="${karaokeClass}" style="color: #888;">'${cleanToken}</span>`;
+      } else {
+        return `<u class="${karaokeClass}" style="font-weight: 800; color: var(--primary-color); text-transform: uppercase;">${t}</u>`;
+      }
+    }).join('');
+  };
+
+  useEffect(() => {
+    if (currentText) {
+      setRhythmHTML(generateRhythmHTML(currentText, activeCharIndex));
+    }
+  }, [activeCharIndex, currentText]);
 
   const loadLibrary = async () => {
     const books = await getBooksFromDB();
@@ -119,18 +156,16 @@ function App() {
     const file = e.target.files[0];
     if (!file) return;
     setLoading(true);
-    setStatus('⏳ 正在解析书架...');
-
+    setStatus('⏳ 正在解析书籍...');
     const buffer = await file.arrayBuffer();
-    const tempBook = ePub(buffer);
-    const meta = await tempBook.loaded.metadata;
+    const epub = ePub(buffer);
+    const meta = await epub.loaded.metadata;
     let coverBlob = null;
-    const coverUrl = await tempBook.coverUrl();
+    const coverUrl = await epub.coverUrl();
     if (coverUrl) {
       const resp = await fetch(coverUrl);
       coverBlob = await resp.blob();
     }
-
     const db = await openDB();
     const tx = db.transaction(STORE_NAME, 'readwrite');
     tx.objectStore(STORE_NAME).add({
@@ -139,107 +174,140 @@ function App() {
       blob: new Blob([buffer], { type: file.type }),
       coverBlob: coverBlob
     });
-
     tx.oncomplete = () => {
-      tempBook.destroy();
+      epub.destroy();
       loadLibrary();
       setLoading(false);
       setStatus('✨ 已存入书架');
     };
   };
 
-  // 🌟 打开书本
   const openBook = (item) => {
     setBookBlob(item.blob);
     setViewMode('reading');
   };
 
-  // 🌟 渲染循环
+  // 全局键盘监听
   useEffect(() => {
-    if (viewMode !== 'reading' || !bookBlob || !viewerRef.current) return;
-
-    const currentViewer = viewerRef.current;
-    currentViewer.innerHTML = ''; 
-
-    const eブック = ePub(bookBlob);
-    const rend = eブック.renderTo(currentViewer, {
-      width: '100%', height: '100%', spread: 'none', manager: 'continuous', flow: 'paginated'
-    });
-
-    const isMobile = window.innerWidth <= 768;
-    rend.themes.default({
-      'p': { 'line-height': isMobile ? '1.25 !important' : '1.6 !important' },
-      'div': { 'line-height': isMobile ? '1.25 !important' : '1.6 !important' }
-    });
-
-    rend.themes.register('theme-light', { body: { background: '#ffffff', color: '#333' }});
-    rend.themes.register('theme-dark', { body: { background: '#121212', color: '#e0e0e0' }});
-    rend.themes.select(theme);
-    rend.themes.font(fontFamily);
-
-    eブック.ready.then(() => {
-      const meta = eブック.packaging.metadata;
-      setBookTitle(meta.title || "未知书籍");
-      const key = `echoreader_pos_${meta.title}`;
-      const saved = localStorage.getItem(key);
-      rend.display(saved || undefined);
-      rend.on('relocated', (loc) => localStorage.setItem(key, loc.start.cfi));
-    });
-
-    eブック.loaded.navigation.then(nav => setToc(nav.toc || []));
-
-    rend.on('selected', (cfi, contents) => {
-      eブック.getRange(cfi).then(range => {
-        const text = range.toString().trim();
-        if (!text) return;
-        setCurrentText(text);
-        setRhythmHTML(generateRhythmHTML(text));
-        const rect = contents.window.getSelection().getRangeAt(0).getBoundingClientRect();
-        const iframeRect = contents.document.defaultView.frameElement.getBoundingClientRect();
-        setPopupPos({ x: iframeRect.left + rect.left + (rect.width / 2), y: iframeRect.top + rect.top - 10 });
-      });
-    });
-
-    rend.on('click', (e) => {
-      setPopupPos(null);
-      if (window.innerWidth <= 768) {
-        const x = e.pageX;
-        const w = window.innerWidth;
-        if (x < w * 0.35) rend.prev();
-        else if (x > w * 0.65) rend.next();
+    const handleGlobalKeyDown = (e) => {
+      if (viewMode === 'reading' && rendition) {
+        if (e.key === 'ArrowRight') rendition.next();
+        if (e.key === 'ArrowLeft') rendition.prev();
       }
-    });
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [viewMode, rendition]);
 
-    setBook(eブック);
-    setRendition(rend);
+  // 🌟 阅读器渲染逻辑核心 (修复白屏的关键点)
+  useEffect(() => {
+    if (viewMode !== 'reading' || !bookBlob) return;
+
+    let rendInstance = null;
+    let bookInstance = null;
+
+    // 🌟 将延迟增加到 400ms，确保 Framer Motion 动画彻底完成，容器尺寸稳定
+    const timer = setTimeout(() => {
+      if (!viewerRef.current || viewMode !== 'reading') return;
+      
+      const container = viewerRef.current;
+      container.innerHTML = ''; 
+
+      console.log("正在渲染书籍...");
+      bookInstance = ePub(bookBlob);
+      rendInstance = bookInstance.renderTo(container, {
+        width: '100%', height: '100%', spread: 'none', manager: 'continuous', flow: 'paginated'
+      });
+
+      const isMobile = window.innerWidth <= 768;
+      rendInstance.themes.default({
+        'p': { 'line-height': isMobile ? '1.25 !important' : '1.6 !important' },
+        'div': { 'line-height': isMobile ? '1.25 !important' : '1.6 !important' }
+      });
+
+      rendInstance.themes.register('theme-light', { body: { background: '#ffffff', color: '#333' }});
+      rendInstance.themes.register('theme-dark', { body: { background: '#121212', color: '#e0e0e0' }});
+      rendInstance.themes.select(theme);
+      rendInstance.themes.font(fontFamily);
+
+      bookInstance.ready.then(() => {
+        const meta = bookInstance.packaging.metadata;
+        setBookTitle(meta.title || "未知书籍");
+        const key = `echoreader_pos_${meta.title}`;
+        const saved = localStorage.getItem(key);
+        rendInstance.display(saved || undefined).catch(() => rendInstance.display());
+        rendInstance.on('relocated', (loc) => localStorage.setItem(key, loc.start.cfi));
+      });
+
+      bookInstance.loaded.navigation.then(nav => setToc(nav.toc || []));
+
+      // 键盘与手势翻页
+      const handleIframeKeyDown = (e) => {
+        if (e.key === 'ArrowRight') rendInstance.next();
+        if (e.key === 'ArrowLeft') rendInstance.prev();
+      };
+      rendInstance.on('keydown', handleIframeKeyDown);
+
+      let touchStartX = 0;
+      rendInstance.on('touchstart', (e) => { touchStartX = e.changedTouches[0].screenX; });
+      rendInstance.on('touchend', (e) => {
+        const touchEndX = e.changedTouches[0].screenX;
+        if (window.innerWidth <= 768) {
+          if (touchEndX < touchStartX - 50) rendInstance.next();
+          if (touchEndX > touchStartX + 50) rendInstance.prev();
+        }
+      });
+
+      rendInstance.on('selected', (cfi, contents) => {
+        bookInstance.getRange(cfi).then(range => {
+          const text = range.toString().trim();
+          if (!text) return;
+          setCurrentText(text);
+          setComparisonHTML(''); 
+          const rect = contents.window.getSelection().getRangeAt(0).getBoundingClientRect();
+          const iframeRect = contents.document.defaultView.frameElement.getBoundingClientRect();
+          setPopupPos({ x: iframeRect.left + rect.left + (rect.width / 2), y: iframeRect.top + rect.top - 10 });
+        });
+      });
+
+      // 🌟 修复桌面端点击逻辑：阻止非手机端的点击翻页
+      rendInstance.on('click', (e) => {
+        setPopupPos(null);
+        const sel = e.view.document.getSelection();
+        if (sel && sel.toString().trim().length > 0) return;
+
+        if (window.innerWidth <= 768) {
+          const screenWidth = e.view.innerWidth;
+          if (e.clientX < screenWidth * 0.35) rendInstance.prev();
+          else if (e.clientX > screenWidth * 0.65) rendInstance.next();
+        }
+      });
+
+      setBook(bookInstance);
+      setRendition(rendInstance);
+    }, 400); 
 
     return () => {
-      rend.destroy();
-      eブック.destroy();
+      clearTimeout(timer);
+      if (rendInstance) rendInstance.destroy();
+      if (bookInstance) bookInstance.destroy();
     };
   }, [viewMode, bookBlob]);
 
-  // 韵律引擎
-  const generateRhythmHTML = (text) => {
-    const tokens = text.split(/([a-zA-Z]+(?:'[a-zA-Z]+)?)/);
-    return tokens.map(t => {
-      if (!t.trim() || /^[^a-zA-Z]+$/.test(t)) return t;
-      if (functionWords.has(t.toLowerCase())) return `<span style="color: #888;">'${t.toLowerCase()}</span>`;
-      return `<u style="font-weight: 800; color: var(--primary-color); text-transform: uppercase;">${t}</u>`;
-    }).join('');
-  };
-
-  // 🌟 统一收藏逻辑函数
   const syncFavs = (newList) => {
     setFavorites(newList);
     localStorage.setItem('echoreader_local_favs', JSON.stringify(newList));
   };
 
   const playTTS = () => {
+    if (!currentText) return;
     window.speechSynthesis.cancel();
     const ut = new SpeechSynthesisUtterance(currentText);
     const v = voices.find(x => x.voiceURI === selectedVoice);
     if (v) ut.voice = v;
+    ut.onboundary = (event) => event.name === 'word' && setActiveCharIndex(event.charIndex);
+    ut.onend = () => setActiveCharIndex(-1);
+    ut.onerror = () => setActiveCharIndex(-1);
     window.speechSynthesis.speak(ut);
   };
 
@@ -261,7 +329,23 @@ function App() {
         const ac = new AudioContext({ sampleRate: 16000 });
         const buf = await ac.decodeAudioData(await blob.arrayBuffer());
         const out = await transcriberRef.current(buf.getChannelData(0));
-        setStatus(`识别结果: "${out.text.trim()}"`);
+        const recognizedText = out.text.trim();
+        const clean = (str) => str.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "").trim();
+        const originalWords = currentText.split(/(\s+)/);
+        const recognizedWords = clean(recognizedText).split(/\s+/);
+        let recIdx = 0;
+        const feedback = originalWords.map((token) => {
+            if (!token.trim()) return token;
+            const cleanToken = clean(token);
+            if (!cleanToken) return token;
+            let found = false;
+            for (let i = recIdx; i < Math.min(recIdx + 4, recognizedWords.length); i++) {
+                if (recognizedWords[i] === cleanToken) { found = true; recIdx = i + 1; break; }
+            }
+            return found ? `<span style="color: #28a745; font-weight: bold; border-bottom: 2px solid #28a745;">${token}</span>` : `<span style="color: #dc3545; text-decoration: line-through; opacity: 0.8;">${token}</span>`;
+        });
+        setComparisonHTML(feedback.join(''));
+        setStatus(`识别完成`);
         stream.getTracks().forEach(t => t.stop());
       };
       mr.start();
@@ -269,112 +353,134 @@ function App() {
     }
   };
 
+  const pageVariants = {
+    initial: { opacity: 0, y: 10 },
+    animate: { opacity: 1, y: 0, transition: { duration: 0.3 } },
+    exit: { opacity: 0, transition: { duration: 0.2 } }
+  };
+
+  const sidebarVariants = {
+    closed: { x: "100%", transition: { type: "spring", stiffness: 300, damping: 30 } },
+    open: { x: 0, transition: { type: "spring", stiffness: 300, damping: 30 } }
+  };
+
   return (
     <div className="app-container">
-      {/* --- 全局渲染逻辑 --- */}
-      
-      {viewMode === 'library' ? (
-        <div className="bookshelf-container">
-          <div className="header">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><Library /> <b>EchoReader 书架</b></div>
-            <div className="toolbar">
-              {/* 🌟 书架增加收藏入口 */}
-              <button className="btn btn-fav" onClick={() => setShowFavorites(true)} style={{backgroundColor: '#FF9900', color: '#000'}}><Bookmark size={16} /> 收藏夹</button>
-              <label className="btn">
-                <Upload size={16} /> 上传 EPUB
-                <input type="file" accept=".epub" onChange={handleUpload} style={{ display: 'none' }} />
-              </label>
-            </div>
-          </div>
-          <div className="library-status">{status}</div>
-          <div className="bookshelf-grid">
-            {libraryBooks.map(b => (
-              <div key={b.id} className="book-card" onClick={() => openBook(b)}>
-                <div className="book-cover-wrapper">
-                  {b.coverUrl ? <img src={b.coverUrl} className="book-cover" alt="" /> : <div className="no-cover">📖</div>}
-                  <button className="btn-delete-book" onClick={(e) => { e.stopPropagation(); deleteBookFromDB(b.id); loadLibrary(); }}><Trash2 size={16} /></button>
-                </div>
-                <div className="book-info"><b>{b.title}</b><p>{b.author}</p></div>
-              </div>
-            ))}
-          </div>
-          {loading && <div className="overlay"><Loader2 className="animate-spin" size={48} color="white" /></div>}
-        </div>
-      ) : (
-        <div className="reader-view">
-          <div className="header">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <button className="btn btn-icon" onClick={() => { setViewMode('library'); setBookBlob(null); }}><Library size={20} /></button>
-              <button className="btn btn-icon hide-on-mobile" onClick={() => setShowToc(true)}><Menu size={20} /></button>
-              <span className="hide-on-mobile"><b>{bookTitle}</b></span>
-            </div>
-            <div className="toolbar">
-              <button className="btn btn-fav" onClick={() => setShowFavorites(true)} style={{backgroundColor: '#FF9900', color: '#000'}}><Bookmark size={16} /> 收藏夹</button>
-              <select className="select-theme" value={theme} onChange={e => setTheme(e.target.value)}>
-                <option value="theme-light">☀️ 浅色</option>
-                <option value="theme-dark">🌙 深色</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="main-content">
-            <button className="nav-btn nav-btn-left hide-on-mobile" onClick={() => rendition?.prev()}><ChevronLeft size={36} /></button>
-            <div id="viewer" ref={viewerRef}></div>
-            {popupPos && (
-              <div className="selection-popup" style={{ left: popupPos.x, top: popupPos.y }}>
-                <button className="popup-btn" onClick={() => {
-                  const item = { id: Date.now(), text: currentText, book: bookTitle, date: new Date().toLocaleString() };
-                  syncFavs([item, ...favorites]);
-                  setPopupPos(null);
-                }}>⭐ 收藏</button>
-              </div>
-            )}
-            <button className="nav-btn nav-btn-right hide-on-mobile" onClick={() => rendition?.next()}><ChevronRight size={36} /></button>
-          </div>
-
-          <div className="scoring-panel">
-            {rhythmHTML && <div className="rhythm-display" dangerouslySetInnerHTML={{ __html: rhythmHTML }} />}
-            <div className="panel-controls">
-              <div className="status-text">{status}</div>
+      <AnimatePresence mode="wait">
+        {viewMode === 'library' ? (
+          <motion.div key="library" className="bookshelf-container" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+            <div className="header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><Library /> <b>EchoReader 书架</b></div>
               <div className="toolbar">
-                <select className="voice-select" value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}>
-                  {voices.map(v => <option key={v.voiceURI} value={v.voiceURI}>🇺🇸 {v.name.split(' ')[1] || v.name}</option>)}
-                </select>
-                <button className="btn" onClick={playTTS}><Play size={16} /> 标准音</button>
-                <button className="btn" onClick={toggleRecording} style={{ background: isRecording ? '#f44' : '#1a73e8' }}>{isRecording ? '结束' : '跟读'}</button>
+                <button className="btn btn-fav" onClick={() => setShowFavorites(true)}><Bookmark size={16} /> 收藏夹</button>
+                <label className="btn">
+                  <Upload size={16} /> 上传 EPUB
+                  <input type="file" accept=".epub" onChange={handleUpload} style={{ display: 'none' }} />
+                </label>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+            <div className="library-status">{status}</div>
+            <div className="bookshelf-grid">
+              {libraryBooks.map((b, index) => (
+                <motion.div key={b.id} className="book-card" onClick={() => openBook(b)} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1, transition: { delay: index * 0.05 } }} whileTap={{ scale: 0.95 }}>
+                  <div className="book-cover-wrapper">
+                    {b.coverUrl ? <img src={b.coverUrl} className="book-cover" alt="" /> : <div className="no-cover">📖</div>}
+                    <button className="btn-delete-book" onClick={(e) => { e.stopPropagation(); deleteBookFromDB(b.id); loadLibrary(); }}><Trash2 size={16} /></button>
+                  </div>
+                  <div className="book-info"><b>{b.title}</b><p>{b.author}</p></div>
+                </motion.div>
+              ))}
+            </div>
+            {loading && <div className="overlay"><Loader2 className="animate-spin" size={48} color="white" /></div>}
+          </motion.div>
+        ) : (
+          <motion.div key="reader" className="reader-view" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+            <div className="header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <button className="btn btn-icon" onClick={() => { setViewMode('library'); setBookBlob(null); }}><Library size={20} /></button>
+                <button className="btn btn-icon hide-on-mobile" onClick={() => setShowToc(true)}><Menu size={20} /></button>
+                <span className="hide-on-mobile"><b>{bookTitle}</b></span>
+              </div>
+              <div className="toolbar">
+                <button className="btn btn-fav" onClick={() => setShowFavorites(true)}><Bookmark size={16} /> 收藏夹</button>
+                <select className="select-theme" value={theme} onChange={e => setTheme(e.target.value)}>
+                  <option value="theme-light">☀️ 浅色模式</option>
+                  <option value="theme-dark">🌙 深色模式</option>
+                </select>
+              </div>
+            </div>
 
-      {/* --- 🌟 全局共用组件：侧边栏和遮罩 --- */}
+            <div className="main-content">
+              <button className="nav-btn nav-btn-left hide-on-mobile" onClick={() => rendition?.prev()}><ChevronLeft size={36} /></button>
+              <div id="viewer" ref={viewerRef} className={activeCharIndex !== -1 ? 'reading-active' : ''}></div>
+              {popupPos && (
+                <motion.div className="selection-popup" style={{ left: popupPos.x, top: popupPos.y }} initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }}>
+                  <button className="popup-btn" onClick={() => {
+                    const item = { id: Date.now(), text: currentText, book: bookTitle, date: new Date().toLocaleString() };
+                    syncFavs([item, ...favorites]);
+                    setPopupPos(null);
+                  }}>⭐ 收藏</button>
+                </motion.div>
+              )}
+              <button className="nav-btn nav-btn-right hide-on-mobile" onClick={() => rendition?.next()}><ChevronRight size={36} /></button>
+            </div>
 
-      <div className={`toc-sidebar ${showToc ? 'open' : ''}`}>
-        <div className="toc-header"><b>目录</b><X onClick={() => setShowToc(false)} /></div>
-        <div className="toc-content">{toc.map((t, i) => <div key={i} className="toc-item" onClick={() => { rendition.display(t.href); setShowToc(false); }}>{t.label}</div>)}</div>
-      </div>
-
-      <div className={`fav-sidebar ${showFavorites ? 'open' : ''}`}>
-        <div className="toc-header"><b>收藏夹</b><X onClick={() => setShowFavorites(false)} /></div>
-        <div className="toc-content">
-          {favorites.length === 0 ? <p style={{textAlign:'center', padding:'20px'}}>暂无收藏内容</p> : 
-            favorites.map(f => (
-              <div key={f.id} className="fav-item">
-                <p>{f.text}</p>
-                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                  <small style={{color:'var(--primary-color)'}}>📖 {f.book}</small>
-                  <Trash2 size={14} style={{cursor:'pointer', color:'#ff4444'}} onClick={() => {
-                    syncFavs(favorites.filter(x => x.id !== f.id));
-                  }} />
+            <div className="scoring-panel">
+              <div className="feedback-container">
+                  <div className="feedback-title"><Volume2 size={14} /> 朗读/韵律 {activeCharIndex !== -1 && <span className="karaoke-badge">同步中...</span>}</div>
+                  {rhythmHTML && <div className="rhythm-display karaoke-mode" dangerouslySetInnerHTML={{ __html: rhythmHTML }} />}
+                  {comparisonHTML && (
+                      <>
+                          <div className="feedback-title" style={{marginTop:'8px'}}><CheckCircle2 size={14} color="#28a745" /> 跟读得分</div>
+                          <div className="rhythm-display comparison-display" dangerouslySetInnerHTML={{ __html: comparisonHTML }} />
+                      </>
+                  )}
+              </div>
+              <div className="panel-controls">
+                <div className="status-text">{status}</div>
+                <div className="toolbar">
+                  <select className="voice-select" value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}>{voices.map(v => <option key={v.voiceURI} value={v.voiceURI}>🇺🇸 {v.name.split(' ')[1] || v.name}</option>)}</select>
+                  <button className="btn" onClick={playTTS} style={{ animation: activeCharIndex !== -1 ? 'pulse 1s infinite' : 'none' }}><Play size={16} /> {activeCharIndex !== -1 ? '朗读中' : '标准音'}</button>
+                  <button className="btn" onClick={toggleRecording} style={{ background: isRecording ? '#f44' : '#1a73e8' }}><Mic size={16} /> {isRecording ? '结束' : '跟读'}</button>
                 </div>
               </div>
-            ))
-          }
-        </div>
-      </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {(showToc || showFavorites) && <div className="overlay" onClick={() => { setShowToc(false); setShowFavorites(false); }}></div>}
+      <AnimatePresence>
+        {showToc && (
+          <>
+            <motion.div key="overlay-toc" className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowToc(false)} />
+            <motion.div key="sidebar-toc" className="toc-sidebar" variants={sidebarVariants} initial={{ x: "-100%" }} animate={{ x: 0 }} exit={{ x: "-100%" }} style={{left:0, right:'auto'}}>
+              <div className="toc-header"><b>目录</b><X onClick={() => setShowToc(false)} /></div>
+              <div className="toc-content">{toc.map((t, i) => <div key={i} className="toc-item" onClick={() => { rendition.display(t.href); setShowToc(false); }}>{t.label}</div>)}</div>
+            </motion.div>
+          </>
+        )}
+        {showFavorites && (
+          <>
+            <motion.div key="overlay-fav" className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowFavorites(false)} />
+            <motion.div key="sidebar-fav" className="fav-sidebar" variants={sidebarVariants} initial="closed" animate="open" exit="closed">
+              <div className="toc-header"><b>收藏夹</b><X onClick={() => setShowFavorites(false)} /></div>
+              <div className="toc-content">
+                {favorites.length === 0 ? <p style={{textAlign:'center', padding:'20px'}}>暂无收藏内容</p> : 
+                  favorites.map(f => (
+                    <div key={f.id} className="fav-item">
+                      <p>{f.text}</p>
+                      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                        <small style={{color:'var(--primary-color)'}}>📖 {f.book}</small>
+                        <Trash2 size={14} style={{cursor:'pointer', color:'#ff4444'}} onClick={() => syncFavs(favorites.filter(x => x.id !== f.id))} />
+                      </div>
+                    </div>
+                  ))
+                }
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
