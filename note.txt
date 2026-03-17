@@ -1,0 +1,8 @@
+password
+My-Drop-Site
+
+https://remarkable-dango-5d357d.netlify.app/
+
+
+npm run build
+npm run preview
