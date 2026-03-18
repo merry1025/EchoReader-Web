@@ -58,8 +58,6 @@ function App() {
   const [isPaused, setIsPaused] = useState(false);
   const [activeCharIndex, setActiveCharIndex] = useState(-1);
 
-  const [voices, setVoices] = useState([]);
-  const [selectedVoice, setSelectedVoice] = useState('');
   const [toc, setToc] = useState([]);
   const [showToc, setShowToc] = useState(false);
   const [favorites, setFavorites] = useState([]);
@@ -69,25 +67,8 @@ function App() {
   const viewerRef = useRef(null);
   const rhythmRef = useRef(null);
 
-  // 1. 🌟 修复：不再过滤掉中文语音，获取系统内所有的语音库
+  // 1. 初始化
   useEffect(() => {
-    const loadVoices = () => {
-      const v = window.speechSynthesis.getVoices();
-      setVoices(v);
-      
-      // UI 下拉框默认选用系统第一个英文发音
-      setSelectedVoice(prev => {
-        if (!prev) {
-          const enVoices = v.filter(x => x.lang.includes('en'));
-          return enVoices.length > 0 ? enVoices[0].voiceURI : (v.length > 0 ? v[0].voiceURI : '');
-        }
-        return prev;
-      });
-    };
-    
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-
     const saved = localStorage.getItem('echoreader_local_favs');
     if (saved) setFavorites(JSON.parse(saved));
     loadLibrary();
@@ -187,7 +168,7 @@ function App() {
     }
   }, [activeCharIndex]);
 
-  // --- 🌟 核心播放控制：智能双语切割引擎 ---
+  // --- 🌟 核心播放控制：大道至简的系统级语种切换 ---
   const handlePlay = async () => {
     if (isPaused) {
       window.speechSynthesis.resume();
@@ -208,41 +189,32 @@ function App() {
     if (!textToRead || textToRead.includes("（") || textToRead.includes("⏳")) return;
     
     setTimeout(() => {
-      // 🌟 自动语种切分：按中文及其标点符号切分区块，过滤掉空串
+      // 自动语种切分：按中文及其标点符号切分区块，过滤掉空串
       const blocks = textToRead.split(/([\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]+)/g).filter(Boolean);
       let currentOffset = 0;
 
-      // 利用 SpeechSynthesis 队列特性，将中英区块依次压入队列
       blocks.forEach((block, index) => {
-        // 如果只是空格或换行，直接跳过不发音，但进度必须累加
         if (!block.trim() && !/[\u4e00-\u9fa5]/.test(block)) {
            currentOffset += block.length;
            return; 
         }
 
         const ut = new SpeechSynthesisUtterance(block);
-        
-        // 判断当前文字块是否含有中文
         const isZh = /[\u4e00-\u9fa5]/.test(block);
 
-        if (isZh) {
-          // 选用系统内置的中文字库（安卓和iOS对中文语言包的命名不同）
-          ut.voice = voices.find(v => v.lang.toLowerCase().includes('zh') || v.lang.toLowerCase().includes('cmn')) || null;
-        } else {
-          // 选用用户在下拉菜单中指定的英文发音
-          ut.voice = voices.find(v => v.voiceURI === selectedVoice) || voices.find(v => v.lang.includes('en')) || null;
-        }
-        
+        // 🌟 核心改动：不再手动干预 voice，只赋予最标准的 lang 标签
+        // 苹果、安卓底层 AI 会自动根据 lang 召唤最佳本国原生语音！
+        ut.lang = isZh ? 'zh-CN' : 'en-US';
         ut.rate = 0.95; 
 
         const blockOffset = currentOffset;
         currentOffset += block.length;
 
-        // 🌟 针对手机端的兼容性卡拉OK高亮
+        // 手机端兼容性卡拉OK高亮
         ut.onstart = () => { 
           setIsSpeaking(true); 
           setIsPaused(false); 
-          setActiveCharIndex(blockOffset); // 兜底策略：手机不触发 word 时也能亮起整块句首
+          setActiveCharIndex(blockOffset); 
         };
         
         ut.onboundary = (event) => {
@@ -252,7 +224,6 @@ function App() {
         };
 
         ut.onend = () => {
-          // 只有当队列里最后一个块读完时，才重置状态
           if (index === blocks.length - 1) {
             setIsSpeaking(false); setIsPaused(false); setActiveCharIndex(-1);
           }
@@ -469,7 +440,6 @@ function App() {
             <div className="header" style={{ flexWrap: 'wrap', gap: '10px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <button className="btn btn-icon" onClick={() => { setViewMode('library'); setBookBlob(null); handleStop(); }} title="返回"><Library size={20} /></button>
-                {/* 🌟 修复：彻底移除了手机端不显示目录按钮的 class */}
                 <button className="btn btn-icon" onClick={() => setShowToc(true)} title="目录"><Menu size={20} /></button>
               </div>
               
@@ -491,10 +461,6 @@ function App() {
               </div>
 
               <div className="toolbar" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                {/* 仅过滤出英文语音展示给用户，系统保留中文 */}
-                <select className="voice-select hide-on-mobile" value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}>
-                  {voices.filter(v => v.lang.includes('en')).map(v => <option key={v.voiceURI} value={v.voiceURI}>🇺🇸 {v.name.split(' ')[1] || v.name}</option>)}
-                </select>
                 <select className="select-theme" value={theme} onChange={e => setTheme(e.target.value)}>
                   <option value="theme-light">☀️ 浅色</option>
                   <option value="theme-dark">🌙 深色</option>
@@ -521,11 +487,6 @@ function App() {
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px'}}>
                 <div className="feedback-title" style={{margin: 0}}>
                   <Volume2 size={14} /> 实时朗读区域 {activeCharIndex !== -1 && <span className="karaoke-badge">双语播放中</span>}
-                </div>
-                <div className="show-on-mobile-only" style={{display: 'none'}}>
-                  <select className="voice-select" style={{padding: '2px 4px', fontSize: '12px'}} value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}>
-                    {voices.filter(v => v.lang.includes('en')).map(v => <option key={v.voiceURI} value={v.voiceURI}>语音 {v.name.split(' ')[1] || 'Default'}</option>)}
-                  </select>
                 </div>
               </div>
               
