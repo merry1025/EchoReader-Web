@@ -69,13 +69,12 @@ function App() {
   const viewerRef = useRef(null);
   const rhythmRef = useRef(null);
 
-  // 1. 🌟 修改：初始化时加载系统全部语音（包含中文和英文）
+  // 初始化时加载系统全部语音
   useEffect(() => {
     const loadVoices = () => {
       const v = window.speechSynthesis.getVoices();
       setVoices(v);
       
-      // UI 下拉框默认选用系统第一个英文发音
       setSelectedVoice(prev => {
         if (!prev) {
           const enVoices = v.filter(x => x.lang.includes('en'));
@@ -95,7 +94,6 @@ function App() {
     return () => window.speechSynthesis.cancel();
   }, []);
 
-  // 2. 主题同步
   useEffect(() => {
     document.body.className = theme;
     if (rendition) rendition.themes.select(theme);
@@ -171,13 +169,11 @@ function App() {
     }).join('');
   };
 
-  // 监听进度更新 UI
   useEffect(() => {
     const targetText = currentText || pageText;
     setRhythmHTML(generateRhythmHTML(targetText, activeCharIndex));
   }, [activeCharIndex, pageText, currentText]);
 
-  // 自动平滑滚动
   useEffect(() => {
     if (rhythmRef.current && activeCharIndex !== -1) {
       const activeEl = rhythmRef.current.querySelector('.active-word-glow');
@@ -187,7 +183,7 @@ function App() {
     }
   }, [activeCharIndex]);
 
-  // --- 🌟 核心播放控制：智能双语切割引擎 ---
+  // 智能双语切割引擎
   const handlePlay = async () => {
     if (isPaused) {
       window.speechSynthesis.resume();
@@ -208,22 +204,16 @@ function App() {
     if (!textToRead || textToRead.includes("（") || textToRead.includes("⏳")) return;
     
     setTimeout(() => {
-      // 🌟 自动语种切分：按中文及其标点符号切分区块，过滤掉空串
       const blocks = textToRead.split(/([\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]+)/g).filter(Boolean);
       let currentOffset = 0;
 
-      // 利用 SpeechSynthesis 队列特性，将中英区块依次压入队列
       blocks.forEach((block, index) => {
         const ut = new SpeechSynthesisUtterance(block);
-        
-        // 判断当前文字块是否含有中文
         const isZh = /[\u4e00-\u9fa5]/.test(block);
 
         if (isZh) {
-          // 选用系统内置的中文字库
           ut.voice = voices.find(v => v.lang.includes('zh') || v.lang.includes('cmn')) || null;
         } else {
-          // 选用用户在下拉菜单中指定的英文发音
           ut.voice = voices.find(v => v.voiceURI === selectedVoice) || voices.find(v => v.lang.includes('en')) || null;
         }
         
@@ -234,7 +224,6 @@ function App() {
 
         ut.onstart = () => { setIsSpeaking(true); setIsPaused(false); };
         
-        // 🌟 跨越语种的光标全局偏移量计算
         ut.onboundary = (event) => {
           if (event.name === 'word') {
             setActiveCharIndex(blockOffset + event.charIndex);
@@ -242,7 +231,6 @@ function App() {
         };
 
         ut.onend = () => {
-          // 只有当队列里最后一个块读完时，才重置状态
           if (index === blocks.length - 1) {
             setIsSpeaking(false); setIsPaused(false); setActiveCharIndex(-1);
           }
@@ -459,7 +447,8 @@ function App() {
             <div className="header" style={{ flexWrap: 'wrap', gap: '10px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <button className="btn btn-icon" onClick={() => { setViewMode('library'); setBookBlob(null); handleStop(); }} title="返回"><Library size={20} /></button>
-                <button className="btn btn-icon hide-on-mobile" onClick={() => setShowToc(true)} title="目录"><Menu size={20} /></button>
+                {/* 🌟 核心修复：移除了 hide-on-mobile，保证手机端显示目录按钮 */}
+                <button className="btn btn-icon" onClick={() => setShowToc(true)} title="目录"><Menu size={20} /></button>
               </div>
               
               <div className="control-toolbar" style={{ display: 'flex', gap: '8px', flex: 1, justifyContent: 'center' }}>
@@ -480,7 +469,6 @@ function App() {
               </div>
 
               <div className="toolbar" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                {/* 🌟 过滤：仅在下拉菜单中显示英文发音，保持 UI 清爽 */}
                 <select className="voice-select hide-on-mobile" value={selectedVoice} onChange={e => setSelectedVoice(e.target.value)}>
                   {voices.filter(v => v.lang.includes('en')).map(v => <option key={v.voiceURI} value={v.voiceURI}>🇺🇸 {v.name.split(' ')[1] || v.name}</option>)}
                 </select>

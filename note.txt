@@ -3,6 +3,33 @@ My-Drop-Site
 
 https://remarkable-dango-5d357d.netlify.app/
 
+cd D:\Tools Dowloaded\EchoReader Ultra Web\echoreader-web
+npm run dev
 
 npm run build
 npm run preview
+
+
+git remote add origin https://github.com/merry1025/EchoReader-Web
+
+第二步：将更改推送到 GitHub
+
+打开你的项目终端（D:\Tools Dowloaded\EchoReader Ultra Web\echoreader-web），依次输入以下命令：
+
+    查看状态（确认 App.jsx 已修改）：
+    Bash
+
+    git status
+
+    添加并提交：
+    Bash
+
+    git add .
+    git commit -m "移除录音功能，加上全文朗读和中文阅读"
+
+    推送到云端：
+    Bash
+
+    git push origin main
+
+https://app.netlify.com/projects/fascinating-sprite-42e8d0/overview
