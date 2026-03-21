@@ -3,14 +3,18 @@ import ePub from 'epubjs';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Upload, Play, Pause, Square, Menu, ChevronLeft, ChevronRight, 
-  X, Bookmark, Trash2, Library, Volume2, Loader2
+  X, Bookmark, Trash2, Library, Volume2, Loader2, Sparkles
 } from 'lucide-react';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import './App.css';
 
-// 虚词列表：用于自动标记弱读
+// ==========================================
+// 🌟 填入你的 Gemini API Key
+// ==========================================
+const GEMINI_API_KEY = "AIzaSyBhCV_fSQl4OaeGrGo-EBm0dIn7rMKKGUw";
+
 const functionWords = new Set(["a", "an", "the", "and", "but", "or", "for", "nor", "so", "yet", "at", "by", "from", "in", "into", "of", "on", "to", "with", "as", "about", "i", "me", "my", "mine", "you", "your", "yours", "he", "him", "his", "she", "her", "hers", "it", "its", "we", "us", "our", "ours", "they", "them", "their", "theirs", "this", "that", "these", "those", "is", "am", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could", "shall", "should", "will", "would", "may", "might", "must"]);
 
-// --- IndexedDB 核心逻辑 ---
 const DB_NAME = 'EchoReaderDB';
 const STORE_NAME = 'books';
 
@@ -48,15 +52,17 @@ function App() {
   const [bookTitle, setBookTitle] = useState('EchoReader');
   const [theme, setTheme] = useState('theme-light');
   
-  // 朗读与文本状态
   const [pageText, setPageText] = useState(''); 
   const [currentText, setCurrentText] = useState(''); 
   const [rhythmHTML, setRhythmHTML] = useState('');
   
-  // 播放控制状态
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [activeCharIndex, setActiveCharIndex] = useState(-1);
+
+  const [bottomTab, setBottomTab] = useState('tts'); 
+  const [aiAnalysis, setAiAnalysis] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const [toc, setToc] = useState([]);
   const [showToc, setShowToc] = useState(false);
@@ -66,17 +72,30 @@ function App() {
 
   const viewerRef = useRef(null);
   const rhythmRef = useRef(null);
+  const utterancesRef = useRef([]); 
 
-  // 1. 初始化
   useEffect(() => {
     const saved = localStorage.getItem('echoreader_local_favs');
     if (saved) setFavorites(JSON.parse(saved));
     loadLibrary();
+    window.speechSynthesis.getVoices(); 
 
-    return () => window.speechSynthesis.cancel();
+    // 全局点击监听：点击空白处隐藏收藏弹窗
+    const handleGlobalClick = (e) => {
+      if (!e.target.closest('.selection-popup')) {
+        const sel = window.getSelection();
+        if (!sel || sel.toString().trim().length === 0) {
+          setPopupPos(null);
+        }
+      }
+    };
+    document.addEventListener('pointerdown', handleGlobalClick);
+    return () => {
+      window.speechSynthesis.cancel();
+      document.removeEventListener('pointerdown', handleGlobalClick);
+    };
   }, []);
 
-  // 2. 主题同步
   useEffect(() => {
     document.body.className = theme;
     if (rendition) rendition.themes.select(theme);
@@ -97,7 +116,6 @@ function App() {
     setViewMode('reading');
   };
 
-  // CFI 锚点精确文本抓取
   const extractPageText = async (rendInstance, bookInstance) => {
     try {
       const loc = rendInstance.currentLocation();
@@ -127,7 +145,6 @@ function App() {
     }
   };
 
-  // 韵律生成引擎 (实词大写、虚词变灰、卡拉OK高亮)
   const generateRhythmHTML = (text, highlightIndex = -1) => {
     if (!text) return '';
     const tokens = text.split(/([a-zA-Z]+(?:'[a-zA-Z]+)?|\s+|[^\w\s])/g).filter(Boolean);
@@ -152,23 +169,20 @@ function App() {
     }).join('');
   };
 
-  // 监听进度更新 UI
   useEffect(() => {
     const targetText = currentText || pageText;
     setRhythmHTML(generateRhythmHTML(targetText, activeCharIndex));
   }, [activeCharIndex, pageText, currentText]);
 
-  // 自动平滑滚动
   useEffect(() => {
-    if (rhythmRef.current && activeCharIndex !== -1) {
+    if (rhythmRef.current && activeCharIndex !== -1 && bottomTab === 'tts') {
       const activeEl = rhythmRef.current.querySelector('.active-word-glow');
       if (activeEl) {
         activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     }
-  }, [activeCharIndex]);
+  }, [activeCharIndex, bottomTab]);
 
-  // --- 🌟 核心播放控制：大道至简的系统级语种切换 ---
   const handlePlay = async () => {
     if (isPaused) {
       window.speechSynthesis.resume();
@@ -178,20 +192,21 @@ function App() {
 
     window.speechSynthesis.cancel(); 
     setActiveCharIndex(-1);
+    setBottomTab('tts'); 
 
-    let textToRead = currentText;
+    let textToRead = currentText || pageText;
 
-    if (!textToRead) {
+    if (!textToRead || textToRead.startsWith("⏳")) {
       setPageText("⏳ 正在获取当前页面...");
       textToRead = await extractPageText(rendition, book);
     }
 
-    if (!textToRead || textToRead.includes("（") || textToRead.includes("⏳")) return;
+    if (!textToRead || textToRead.startsWith("（无法获取") || textToRead.startsWith("（当前页面")) return;
     
     setTimeout(() => {
-      // 自动语种切分：按中文及其标点符号切分区块，过滤掉空串
       const blocks = textToRead.split(/([\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]+)/g).filter(Boolean);
       let currentOffset = 0;
+      utterancesRef.current = [];
 
       blocks.forEach((block, index) => {
         if (!block.trim() && !/[\u4e00-\u9fa5]/.test(block)) {
@@ -202,15 +217,12 @@ function App() {
         const ut = new SpeechSynthesisUtterance(block);
         const isZh = /[\u4e00-\u9fa5]/.test(block);
 
-        // 🌟 核心改动：不再手动干预 voice，只赋予最标准的 lang 标签
-        // 苹果、安卓底层 AI 会自动根据 lang 召唤最佳本国原生语音！
         ut.lang = isZh ? 'zh-CN' : 'en-US';
         ut.rate = 0.95; 
 
         const blockOffset = currentOffset;
         currentOffset += block.length;
 
-        // 手机端兼容性卡拉OK高亮
         ut.onstart = () => { 
           setIsSpeaking(true); 
           setIsPaused(false); 
@@ -234,9 +246,10 @@ function App() {
           setIsSpeaking(false); setIsPaused(false); setActiveCharIndex(-1); 
         };
 
+        utterancesRef.current.push(ut);
         window.speechSynthesis.speak(ut);
       });
-    }, 50);
+    }, 100);
   };
 
   const handlePause = () => {
@@ -253,7 +266,71 @@ function App() {
     setActiveCharIndex(-1);
   };
 
-  // --- 电子书渲染 ---
+  const handleAIAnalyze = async () => {
+    const targetText = currentText || pageText;
+    
+    if (!targetText || targetText.startsWith("（无法获取") || targetText.includes("⏳")) {
+      alert("请先确保页面已加载完毕，或选中一段文本。");
+      return;
+    }
+
+    setBottomTab('ai'); 
+    setIsAnalyzing(true);
+    setAiAnalysis("⏳ 正在呼叫 Gemini 进行深度解析，请稍候...");
+
+    try {
+      const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+      const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
+      
+      const prompt = `
+      你是一个资深的英语阅读伴读助手。请阅读以下英文段落，并提供：
+      1. 【本段总结】：用一句精炼的中文总结这段话的核心情节。
+      2. 【疑难词汇与句型】：提取 3-5 个对非母语者较难的单词、地道短语或美式俚语。给出它们在**当前上下文**中的准确中文释义。
+      请用清晰的排版输出，加粗核心词汇。
+      
+      待分析文本：
+      ${targetText}
+      `;
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      setAiAnalysis(response.text());
+    } catch (error) {
+      console.error("AI 分析失败:", error);
+      setAiAnalysis(`❌ 解析失败，请检查网络或 API Key。错误信息: ${error.message}`);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const formatAIResult = (text) => {
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '<b style="color: var(--primary-color)">$1</b>')
+      .replace(/\n/g, '<br/>');
+  };
+
+  // 🌟 新增：处理本地（AI面板）文本划选
+  const handleLocalSelection = () => {
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+      
+      const text = selection.toString().trim();
+      if (text.length > 0) {
+        setCurrentText(text); // 同步到当前文本，允许发音和收藏
+        
+        // 获取划选区域的屏幕坐标
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+        
+        setPopupPos({
+          x: rect.left + (rect.width / 2),
+          y: rect.top - 10
+        });
+      }
+    }, 50);
+  };
+
   useEffect(() => {
     if (viewMode !== 'reading' || !bookBlob) return;
 
@@ -458,6 +535,11 @@ function App() {
                     <Square size={16} /> <span className="hide-on-mobile">停止</span>
                   </button>
                 )}
+
+                <button className="btn btn-control" style={{ backgroundColor: '#673ab7', color: 'white' }} onClick={handleAIAnalyze} disabled={isAnalyzing}>
+                  {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />} 
+                  <span className="hide-on-mobile">AI 分析</span>
+                </button>
               </div>
 
               <div className="toolbar" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -471,31 +553,69 @@ function App() {
             <div className="main-content">
               <button className="nav-btn nav-btn-left hide-on-mobile" onClick={() => rendition?.prev()}><ChevronLeft size={36} /></button>
               <div id="viewer" ref={viewerRef}></div>
-              {popupPos && (
-                <motion.div className="selection-popup" style={{ left: popupPos.x, top: popupPos.y }} initial={{ opacity: 0, scale: 0.5 }} animate={{ opacity: 1, scale: 1 }}>
-                  <button className="popup-btn" onClick={() => {
-                    const item = { id: Date.now(), text: currentText, book: bookTitle, date: new Date().toLocaleString() };
-                    syncFavs([item, ...favorites]);
-                    setPopupPos(null);
-                  }}>⭐ 收藏</button>
-                </motion.div>
-              )}
               <button className="nav-btn nav-btn-right hide-on-mobile" onClick={() => rendition?.next()}><ChevronRight size={36} /></button>
             </div>
 
             <div className="scoring-panel">
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px'}}>
-                <div className="feedback-title" style={{margin: 0}}>
-                  <Volume2 size={14} /> 实时朗读区域 {activeCharIndex !== -1 && <span className="karaoke-badge">双语播放中</span>}
+                <div style={{display: 'flex', gap: '15px'}}>
+                  <div 
+                    onClick={() => setBottomTab('tts')}
+                    style={{ cursor: 'pointer', fontSize: '13px', fontWeight: bottomTab === 'tts' ? 'bold' : 'normal', color: bottomTab === 'tts' ? 'var(--primary-color)' : '#888', borderBottom: bottomTab === 'tts' ? '2px solid var(--primary-color)' : 'none', paddingBottom: '4px' }}
+                  >
+                    <Volume2 size={14} style={{verticalAlign: 'middle', marginRight: '4px'}}/> 
+                    实时朗读
+                    {activeCharIndex !== -1 && bottomTab === 'tts' && <span className="karaoke-badge">播放中</span>}
+                  </div>
+                  <div 
+                    onClick={() => setBottomTab('ai')}
+                    style={{ cursor: 'pointer', fontSize: '13px', fontWeight: bottomTab === 'ai' ? 'bold' : 'normal', color: bottomTab === 'ai' ? 'var(--primary-color)' : '#888', borderBottom: bottomTab === 'ai' ? '2px solid var(--primary-color)' : 'none', paddingBottom: '4px' }}
+                  >
+                    <Sparkles size={14} style={{verticalAlign: 'middle', marginRight: '4px'}}/> 
+                    AI 伴读
+                  </div>
                 </div>
               </div>
               
-              <div 
-                ref={rhythmRef}
-                className="rhythm-display karaoke-mode" 
-                dangerouslySetInnerHTML={{ __html: rhythmHTML || "<p style='color:var(--text-color); opacity: 0.6; text-align:center; font-size:14px; margin:0;'>准备朗读... 点击上方自动朗读或划选文字</p>" }} 
-              />
+              {bottomTab === 'tts' ? (
+                <div 
+                  ref={rhythmRef}
+                  className="rhythm-display karaoke-mode" 
+                  dangerouslySetInnerHTML={{ __html: rhythmHTML || "<p style='color:var(--text-color); opacity: 0.6; text-align:center; font-size:14px; margin:0;'>准备朗读... 点击上方自动朗读或划选文字</p>" }} 
+                />
+              ) : (
+                <div 
+                  className="rhythm-display ai-mode" 
+                  onMouseUp={handleLocalSelection}
+                  onTouchEnd={handleLocalSelection}
+                  onMouseDown={() => setPopupPos(null)} // 开始选择时隐藏现有弹窗
+                  dangerouslySetInnerHTML={{ __html: aiAnalysis ? formatAIResult(aiAnalysis) : "<p style='color:var(--text-color); opacity: 0.6; text-align:center; font-size:14px; margin:0;'>点击上方【AI 分析】按钮，获取当前段落的智能总结与疑难词汇解析。</p>" }} 
+                />
+              )}
             </div>
+            
+            {/* 🌟 核心修复：将收藏弹窗提升到全局并改为 Fixed 定位 */}
+            {popupPos && (
+                <motion.div 
+                  className="selection-popup" 
+                  style={{ 
+                    position: 'fixed', 
+                    left: popupPos.x, 
+                    top: popupPos.y,
+                    transform: 'translate(-50%, -100%)', // 居中并放置在文字正上方
+                    zIndex: 9999 // 确保不被任何面板遮挡
+                  }} 
+                  initial={{ opacity: 0, scale: 0.5 }} 
+                  animate={{ opacity: 1, scale: 1 }}
+                >
+                  <button className="popup-btn" onClick={() => {
+                    const item = { id: Date.now(), text: currentText, book: bookTitle, date: new Date().toLocaleString() };
+                    syncFavs([item, ...favorites]);
+                    setPopupPos(null);
+                    window.getSelection()?.removeAllRanges(); // 收藏后自动取消选择
+                  }}>⭐ 收藏</button>
+                </motion.div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
