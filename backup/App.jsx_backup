@@ -52,12 +52,6 @@ function App() {
   const [bookTitle, setBookTitle] = useState('EchoReader');
   const [theme, setTheme] = useState('theme-light');
   
-  // 🌟 新增：字号状态管理，默认从 localStorage 读取，若无则默认为 16px
-  const [fontSize, setFontSize] = useState(() => {
-    const savedSize = localStorage.getItem('echoreader_font_size');
-    return savedSize ? parseInt(savedSize, 10) : 16;
-  });
-  
   const [pageText, setPageText] = useState(''); 
   const [currentText, setCurrentText] = useState(''); 
   const [rhythmHTML, setRhythmHTML] = useState('');
@@ -86,6 +80,7 @@ function App() {
     loadLibrary();
     window.speechSynthesis.getVoices(); 
 
+    // 全局点击监听：点击空白处隐藏收藏弹窗
     const handleGlobalClick = (e) => {
       if (!e.target.closest('.selection-popup')) {
         const sel = window.getSelection();
@@ -105,14 +100,6 @@ function App() {
     document.body.className = theme;
     if (rendition) rendition.themes.select(theme);
   }, [theme, rendition]);
-
-  // 🌟 新增：监听字号变化，动态注入到 Epub iframe 中，并保存到本地
-  useEffect(() => {
-    if (rendition) {
-      rendition.themes.fontSize(`${fontSize}px`);
-      localStorage.setItem('echoreader_font_size', fontSize.toString());
-    }
-  }, [fontSize, rendition]);
 
   const loadLibrary = async () => {
     const db = await openDB();
@@ -197,45 +184,38 @@ function App() {
   }, [activeCharIndex, bottomTab]);
 
   const handlePlay = async () => {
-    window.speechSynthesis.pause();
-    window.speechSynthesis.resume();
-    window.speechSynthesis.cancel();
-
     if (isPaused) {
       window.speechSynthesis.resume();
       setIsPaused(false);
       return;
     }
 
+    window.speechSynthesis.cancel(); 
     setActiveCharIndex(-1);
     setBottomTab('tts'); 
 
     let textToRead = currentText || pageText;
 
     if (!textToRead || textToRead.startsWith("⏳")) {
-      setPageText("⏳ 正在获取当前页面文本...");
+      setPageText("⏳ 正在获取当前页面...");
       textToRead = await extractPageText(rendition, book);
     }
 
-    if (!textToRead || textToRead.startsWith("（无法获取") || textToRead.startsWith("（当前页面")) {
-      alert("⚠️ 未能提取到当前页面的文字。请尝试往后翻一页，或手动高亮划选一段文字后再试。");
-      return;
-    }
+    if (!textToRead || textToRead.startsWith("（无法获取") || textToRead.startsWith("（当前页面")) return;
     
     setTimeout(() => {
-      const blocks = textToRead.match(/[^.?!。？！\n]+[.?!。？！\n]*/g) || [textToRead];
-      
+      const blocks = textToRead.split(/([\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]+)/g).filter(Boolean);
       let currentOffset = 0;
-      utterancesRef.current = []; 
+      utterancesRef.current = [];
 
       blocks.forEach((block, index) => {
-        if (!block.trim()) {
+        if (!block.trim() && !/[\u4e00-\u9fa5]/.test(block)) {
            currentOffset += block.length;
            return; 
         }
 
         const ut = new SpeechSynthesisUtterance(block);
-        const isZh = /[\u4e00-\u9fa5]/.test(block); 
+        const isZh = /[\u4e00-\u9fa5]/.test(block);
 
         ut.lang = isZh ? 'zh-CN' : 'en-US';
         ut.rate = 0.95; 
@@ -262,7 +242,7 @@ function App() {
         };
 
         ut.onerror = (e) => { 
-          console.error("朗读引擎出错:", e); 
+          console.error("Speech error:", e); 
           setIsSpeaking(false); setIsPaused(false); setActiveCharIndex(-1); 
         };
 
@@ -307,7 +287,7 @@ function App() {
       1. 【本段总结】：用一句精炼的中文总结这段话的核心情节。
       2. 【疑难词汇与句型】：提取 3-5 个对非母语者较难的单词、地道短语或美式俚语。给出它们在**当前上下文**中的准确中文释义。
       请用清晰的排版输出，加粗核心词汇。
-	  3. 如果待分析文本是中文，则请提供相应的符合**当前上下文**的英文翻译。
+	  3. 如果待分析文本是中文，则请提供相应的英文翻译。
       
       待分析文本：
       ${targetText}
@@ -330,6 +310,7 @@ function App() {
       .replace(/\n/g, '<br/>');
   };
 
+  // 🌟 新增：处理本地（AI面板）文本划选
   const handleLocalSelection = () => {
     setTimeout(() => {
       const selection = window.getSelection();
@@ -337,8 +318,9 @@ function App() {
       
       const text = selection.toString().trim();
       if (text.length > 0) {
-        setCurrentText(text); 
+        setCurrentText(text); // 同步到当前文本，允许发音和收藏
         
+        // 获取划选区域的屏幕坐标
         const range = selection.getRangeAt(0);
         const rect = range.getBoundingClientRect();
         
@@ -379,9 +361,6 @@ function App() {
         rendInstance.themes.register('theme-light', { body: { background: '#ffffff', color: '#333' }});
         rendInstance.themes.register('theme-dark', { body: { background: '#121212', color: '#e0e0e0' }});
         rendInstance.themes.select(theme);
-
-        // 初始化加载时，直接应用当前的字号
-        rendInstance.themes.fontSize(`${fontSize}px`);
 
         bookInstance.ready.then(() => {
           setBook(bookInstance);
@@ -564,21 +543,7 @@ function App() {
                 </button>
               </div>
 
-              {/* 🌟 新增：字号控制组，放置在主题切换器旁边 */}
               <div className="toolbar" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <div style={{ display: 'flex', background: 'var(--panel-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', overflow: 'hidden' }}>
-                  <button 
-                    onClick={() => setFontSize(s => Math.max(12, s - 2))} 
-                    style={{ border: 'none', background: 'transparent', padding: '4px 8px', cursor: 'pointer', color: 'var(--text-color)', borderRight: '1px solid var(--border-color)', fontSize: '14px', fontWeight: 'bold' }}
-                    title="缩小字体"
-                  >A-</button>
-                  <button 
-                    onClick={() => setFontSize(s => Math.min(32, s + 2))} 
-                    style={{ border: 'none', background: 'transparent', padding: '4px 8px', cursor: 'pointer', color: 'var(--text-color)', fontSize: '14px', fontWeight: 'bold' }}
-                    title="放大字体"
-                  >A+</button>
-                </div>
-                
                 <select className="select-theme" value={theme} onChange={e => setTheme(e.target.value)}>
                   <option value="theme-light">☀️ 浅色</option>
                   <option value="theme-dark">🌙 深色</option>
@@ -624,12 +589,13 @@ function App() {
                   className="rhythm-display ai-mode" 
                   onMouseUp={handleLocalSelection}
                   onTouchEnd={handleLocalSelection}
-                  onMouseDown={() => setPopupPos(null)} 
+                  onMouseDown={() => setPopupPos(null)} // 开始选择时隐藏现有弹窗
                   dangerouslySetInnerHTML={{ __html: aiAnalysis ? formatAIResult(aiAnalysis) : "<p style='color:var(--text-color); opacity: 0.6; text-align:center; font-size:14px; margin:0;'>点击上方【AI 分析】按钮，获取当前段落的智能总结与疑难词汇解析。</p>" }} 
                 />
               )}
             </div>
             
+            {/* 🌟 核心修复：将收藏弹窗提升到全局并改为 Fixed 定位 */}
             {popupPos && (
                 <motion.div 
                   className="selection-popup" 
@@ -637,8 +603,8 @@ function App() {
                     position: 'fixed', 
                     left: popupPos.x, 
                     top: popupPos.y,
-                    transform: 'translate(-50%, -100%)', 
-                    zIndex: 9999 
+                    transform: 'translate(-50%, -100%)', // 居中并放置在文字正上方
+                    zIndex: 9999 // 确保不被任何面板遮挡
                   }} 
                   initial={{ opacity: 0, scale: 0.5 }} 
                   animate={{ opacity: 1, scale: 1 }}
@@ -647,7 +613,7 @@ function App() {
                     const item = { id: Date.now(), text: currentText, book: bookTitle, date: new Date().toLocaleString() };
                     syncFavs([item, ...favorites]);
                     setPopupPos(null);
-                    window.getSelection()?.removeAllRanges(); 
+                    window.getSelection()?.removeAllRanges(); // 收藏后自动取消选择
                   }}>⭐ 收藏</button>
                 </motion.div>
             )}
