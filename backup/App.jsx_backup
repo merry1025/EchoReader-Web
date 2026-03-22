@@ -11,7 +11,7 @@ import './App.css';
 // ==========================================
 // 🌟 填入你的 Gemini API Key
 // ==========================================
-const GEMINI_API_KEY = "AIzaSyBhCV_fSQl4OaeGrGo-EBm0dIn7rMKKGUw";
+const GEMINI_API_KEY = "key";
 
 const functionWords = new Set(["a", "an", "the", "and", "but", "or", "for", "nor", "so", "yet", "at", "by", "from", "in", "into", "of", "on", "to", "with", "as", "about", "i", "me", "my", "mine", "you", "your", "yours", "he", "him", "his", "she", "her", "hers", "it", "its", "we", "us", "our", "ours", "they", "them", "their", "theirs", "this", "that", "these", "those", "is", "am", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could", "shall", "should", "will", "would", "may", "might", "must"]);
 

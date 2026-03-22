@@ -5,13 +5,10 @@ import {
   Upload, Play, Pause, Square, Menu, ChevronLeft, ChevronRight, 
   X, Bookmark, Trash2, Library, Volume2, Loader2, Sparkles
 } from 'lucide-react';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import './App.css';
 
-// ==========================================
-// 🌟 填入你的 Gemini API Key
-// ==========================================
-const GEMINI_API_KEY = "....";
+// ⚠️ 注意：这里已经删除了对 @google/generative-ai 的 import
+// ⚠️ 注意：这里已经删除了 GEMINI_API_KEY 变量
 
 const functionWords = new Set(["a", "an", "the", "and", "but", "or", "for", "nor", "so", "yet", "at", "by", "from", "in", "into", "of", "on", "to", "with", "as", "about", "i", "me", "my", "mine", "you", "your", "yours", "he", "him", "his", "she", "her", "hers", "it", "its", "we", "us", "our", "ours", "they", "them", "their", "theirs", "this", "that", "these", "those", "is", "am", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could", "shall", "should", "will", "would", "may", "might", "must"]);
 
@@ -52,7 +49,6 @@ function App() {
   const [bookTitle, setBookTitle] = useState('EchoReader');
   const [theme, setTheme] = useState('theme-light');
   
-  // 🌟 新增：字号状态管理，默认从 localStorage 读取，若无则默认为 16px
   const [fontSize, setFontSize] = useState(() => {
     const savedSize = localStorage.getItem('echoreader_font_size');
     return savedSize ? parseInt(savedSize, 10) : 16;
@@ -106,7 +102,6 @@ function App() {
     if (rendition) rendition.themes.select(theme);
   }, [theme, rendition]);
 
-  // 🌟 新增：监听字号变化，动态注入到 Epub iframe 中，并保存到本地
   useEffect(() => {
     if (rendition) {
       rendition.themes.fontSize(`${fontSize}px`);
@@ -286,6 +281,7 @@ function App() {
     setActiveCharIndex(-1);
   };
 
+  // 🌟 修改：使用 fetch 调用云端函数，而不是直接调用大模型 API
   const handleAIAnalyze = async () => {
     const targetText = currentText || pageText;
     
@@ -296,29 +292,44 @@ function App() {
 
     setBottomTab('ai'); 
     setIsAnalyzing(true);
-    setAiAnalysis("⏳ 正在呼叫 Gemini 进行深度解析，请稍候...");
+    setAiAnalysis("⏳ 正在呼叫云端 AI 进行深度解析，请稍候...");
 
     try {
-      const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-      const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
-      
       const prompt = `
       你是一个资深的英语阅读伴读助手。请阅读以下英文段落，并提供：
       1. 【本段总结】：用一句精炼的中文总结这段话的核心情节。
       2. 【疑难词汇与句型】：提取 3-5 个对非母语者较难的单词、地道短语或美式俚语。给出它们在**当前上下文**中的准确中文释义。
       请用清晰的排版输出，加粗核心词汇。
-	  3. 如果待分析文本是中文，则请提供相应的符合**当前上下文**的英文翻译。
+      3. 如果待分析文本是中文，则请提供相应的符合**当前上下文**的英文翻译。
       
       待分析文本：
       ${targetText}
       `;
 
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      setAiAnalysis(response.text());
+      // 发送 POST 请求到你的 Netlify 云函数
+      const response = await fetch('/.netlify/functions/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: prompt }) // 将完整的 Prompt 发送给后端
+      });
+
+      if (!response.ok) {
+        throw new Error(`请求失败，状态码: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.error) {
+         throw new Error(data.error);
+      }
+      
+      setAiAnalysis(data.reply);
+
     } catch (error) {
       console.error("AI 分析失败:", error);
-      setAiAnalysis(`❌ 解析失败，请检查网络或 API Key。错误信息: ${error.message}`);
+      setAiAnalysis(`❌ 解析失败，请检查网络或后端部署配置。错误信息: ${error.message}`);
     } finally {
       setIsAnalyzing(false);
     }
@@ -380,7 +391,6 @@ function App() {
         rendInstance.themes.register('theme-dark', { body: { background: '#121212', color: '#e0e0e0' }});
         rendInstance.themes.select(theme);
 
-        // 初始化加载时，直接应用当前的字号
         rendInstance.themes.fontSize(`${fontSize}px`);
 
         bookInstance.ready.then(() => {
@@ -564,7 +574,6 @@ function App() {
                 </button>
               </div>
 
-              {/* 🌟 新增：字号控制组，放置在主题切换器旁边 */}
               <div className="toolbar" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <div style={{ display: 'flex', background: 'var(--panel-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', overflow: 'hidden' }}>
                   <button 
