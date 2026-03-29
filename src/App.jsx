@@ -309,7 +309,8 @@ function App() {
 
       // 发送 POST 请求到你的 Netlify 云函数
 	  // 假设你的 Netlify 域名是 echoreader-backend.netlify.app
-	const response = await fetch('https://fascinating-sprite-42e8d0.netlify.app', {
+	const response = await fetch('https://fascinating-sprite-42e8d0.netlify.app/.netlify/functions/chat', {
+		method: 'POST',
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
