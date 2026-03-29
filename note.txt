@@ -27,7 +27,7 @@ git remote add origin https://github.com/merry1025/EchoReader-Web
     Bash
 
     git add .
-    git commit -m "去除API"
+    git commit -m "fix logging"
 
     推送到云端：
     Bash
@@ -37,3 +37,10 @@ git remote add origin https://github.com/merry1025/EchoReader-Web
 https://app.netlify.com/projects/fascinating-sprite-42e8d0/overview
 
 3. 如果待分析文本是中文，则请提供相应的英文翻译。
+
+==============
+npm run build
+
+upload dist/index.html and asset folder to hosting echoreader folder
+
+
