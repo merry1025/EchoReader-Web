@@ -302,19 +302,20 @@ function App() {
       请用清晰的排版输出，加粗核心词汇。
       3. 如果待分析文本是中文，则请提供相应的符合**当前上下文**的英文翻译。
 	  4. 不要在开头介绍你自己，直接给出回答。
-      
+      d
       待分析文本：
       ${targetText}
       `;
 
       // 发送 POST 请求到你的 Netlify 云函数
-      const response = await fetch('/.netlify/functions/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: prompt }) // 将完整的 Prompt 发送给后端
-      });
+	  // 假设你的 Netlify 域名是 echoreader-backend.netlify.app
+	const response = await fetch('https://fascinating-sprite-42e8d0.netlify.app', {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify({ text: prompt })
+	});
 
       if (!response.ok) {
         throw new Error(`请求失败，状态码: ${response.status}`);
